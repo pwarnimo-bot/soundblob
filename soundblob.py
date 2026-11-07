@@ -61,13 +61,15 @@ TRAIL_MAX = 18            # ghost-trail circles at full craziness (each is a big
 # Mood calibration, measured on real rock/metal recordings and synthetic techno/psytrance.
 # Spectral flatness (200 Hz-5 kHz): clean/acoustic guitars 0.27-0.52, distorted metal 0.67-0.73
 FLAT_CLEAN, FLAT_DIRTY = 0.50, 0.68
-W_LOUD = 0.30      # loudness vs. the session's loud level (quiet intros/ballads -> lazy)
+W_LOUD = 0.25      # loudness vs. the current song's loud parts (quiet passages -> lazy)
 W_AGGR = 0.30      # distortion (rock/metal guitars)
 W_TEMPO = 0.15     # fast, *reliable* tempo
 W_DENSITY = 0.20   # drum hits per second
-W_DRIVE = 0.20     # rock-steady fast grid: psytrance / hard techno
-W_METAL = 0.20     # distortion + fast kicks: thrash / double bass / blast beats
+W_DRIVE = 0.30     # rock-steady fast grid: full from 136 BPM (psytrance), half at 130 (techno)
+W_METAL = 0.30     # distortion + fast kicks: thrash / double bass / blast beats
 KICK_LOWNESS, SNARE_LOWNESS = 8.0, 6.0
+# loudness reference (seconds): rise, fall, and silence that marks a song change
+LOUD_RISE, LOUD_FALL, LOUD_RESET_SILENCE = 5.0, 40.0, 1.0
 
 
 # --------------------------------------------------------------------------- audio
@@ -115,6 +117,12 @@ class Onsets:
 
     def ratio(self, val):
         return val / (self.thr + 1e-6)
+
+    def reset(self):
+        """New song: forget the previous song's levels."""
+        self.hist.clear()
+        self.pk = 0.0
+        self.freeze = False
 
     @property
     def rate(self):
@@ -197,9 +205,11 @@ class Audio(threading.Thread):
         self.aggression = 0.0      # distorted, dense, loud -> metal
         # mood
         self.short_rms = 0.0
-        self.ref_rms = 0.0         # "how loud is loud" for this listening session
+        self.ref_rms = 0.0         # "how loud is loud" in the current song
+        self._silent_frames = 0
         self.loud_rel = 1.0
         self.energy = 0.4          # 0 = lazy, 0.5 = normal, 1 = crazy
+        self.parts = {}            # weighted mood ingredients (for --debug)
         self.running = True
 
     def run(self):
@@ -376,15 +386,23 @@ class Audio(threading.Thread):
             self.kick.freeze = False
 
     def update_energy(self, rms):
-        """How hyped is the music right now? Loudness relative to the last
-        ~30 s, drum density, tempo and distortion."""
+        """How hyped is the music right now? Loudness within the current song,
+        drum density, tempo and distortion."""
         self.short_rms += (rms - self.short_rms) * 0.06          # ~0.2 s
-        if self.short_rms > 0.003:
+        # Loudness only counts *within* a song: between songs it mostly reflects
+        # mastering, streaming volume normalisation and the volume knob, not energy.
+        # So the reference resets at a song change (>1 s of silence).
+        if self.short_rms < 0.003:
+            self._silent_frames += 1
+            if int(self._silent_frames) == int(FPS * LOUD_RESET_SILENCE):
+                self.song_change()
+        else:
+            self._silent_frames = 0
             if self.ref_rms == 0.0:
                 self.ref_rms = self.short_rms
-            # rises within ~10 s, forgets over ~3 min: a quiet intro after a loud
-            # song (or a ballad on a metal album) reads as quiet
-            k = 1 / (10 * FPS) if self.short_rms > self.ref_rms else 1 / (180 * FPS)
+            # rises within ~5 s, settles to a new level over ~40 s, so quieter
+            # passages and breakdowns read as quieter than the song's loud parts
+            k = 1 / (LOUD_RISE * FPS) if self.short_rms > self.ref_rms else 1 / (LOUD_FALL * FPS)
             self.ref_rms += (self.short_rms - self.ref_rms) * k
         self.loud_rel = self.short_rms / max(self.ref_rms, 1e-4)
 
@@ -394,24 +412,40 @@ class Audio(threading.Thread):
         self.aggression += (aggr_target - self.aggression) * 0.02
         steady = clip01((self.tempo_conf - 0.3) / 0.3) if self.bpm else 0.0
         tempo = clip01((self.bpm - 100) / 45) * steady
-        drive = clip01((self.bpm - 126) / 16) * steady
+        drive = clip01((self.bpm - 124) / 12) * steady
         density = clip01((self.kick_rate + self.snare_rate + 0.5 * self.hat.rate +
                           0.3 * self.onset_rate - 2.5) / 5)
         metal = self.aggression * clip01((self.kick_rate - 1.5) / 2)
-        raw = clip01(W_LOUD * loud + W_AGGR * self.aggression + W_TEMPO * tempo +
-                     W_DENSITY * density + W_DRIVE * drive + W_METAL * metal)
+        self.parts = dict(loud=W_LOUD * loud, aggr=W_AGGR * self.aggression, tempo=W_TEMPO * tempo,
+                          density=W_DENSITY * density, drive=W_DRIVE * drive, metal=W_METAL * metal)
+        raw = clip01(sum(self.parts.values()))
         if self.breakdown:
             raw *= 0.75 + 0.5 * self.build      # tension rises with the build-up
         if self.short_rms < 0.003:
             raw = 0.0
         self.energy += (raw - self.energy) * (0.03 if raw > self.energy else 0.01)
 
+    def song_change(self):
+        """>1 s of silence: a new song starts. Every adaptive level (auto gain,
+        drum thresholds, loudness reference, tempo) starts over, so a quieter
+        song after a loud one isn't judged against the loud one."""
+        self.ref_rms = 0.0
+        self.peak = 1e-4
+        for det in (self.kick, self.snare, self.hat, self.onset):
+            det.reset()
+        self.env.clear()
+        self.bpm = 0.0
+        self.tempo_conf = 0.0
+        self._bpm_votes = 0
+        self._kick_long.clear()
+
     def debug_line(self):
         return (f"bpm={self.bpm:5.1f} conf={self.tempo_conf:.2f} kick/s={self.kick_rate:4.1f} "
                 f"snare/s={self.snare_rate:4.1f} onset/s={self.onset_rate:4.1f} "
                 f"flat={self.flatness:.3f} aggr={self.aggression:.2f} loud={self.loud_rel:.2f} "
                 f"bd={'Y' if self.groove_break else ('i' if self.breakdown else '-')} build={self.build:.2f} "
-                f"drops={self.drops} energy={self.energy:.2f}")
+                f"drops={self.drops} energy={self.energy:.2f} ["
+                + " ".join(f"{k}={v:.2f}" for k, v in self.parts.items()) + "]")
 
 
 # --------------------------------------------------------------------------- helpers

@@ -56,3 +56,8 @@ The pattern is anchored on purpose. A loose `pkill -f soundblob.py` also matches
 
 Calibration constants (mood weights, distortion thresholds, kick/snare gating) are
 at the top of `soundblob.py`.
+
+## License
+
+soundblob is free software, licensed under the
+[GNU General Public License v3.0 or later](LICENSE).

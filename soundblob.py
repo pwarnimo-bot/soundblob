@@ -40,6 +40,12 @@ FFT_SIZE = 2048
 TAU = math.tau
 FPS = RATE / CHUNK   # analysis frames per second (~86)
 
+# Confetti budget. Every particle costs ~0.02 ms of CPU drawing per frame, so keep it modest.
+# --confetti scales both (0 = none, 1 = default, 2 = double).
+CONFETTI_RATE = 0.35      # fraction of requested particles that actually spawn
+MAX_PARTICLES = 120       # hard cap on live particles
+TRAIL_MAX = 18            # ghost-trail circles at full craziness (each is a big translucent fill)
+
 # Mood calibration, measured on real rock/metal recordings and synthetic techno/psytrance.
 # Spectral flatness (200 Hz-5 kHz): clean/acoustic guitars 0.27-0.52, distorted metal 0.67-0.73
 FLAT_CLEAN, FLAT_DIRTY = 0.50, 0.68
@@ -437,8 +443,10 @@ def quiet_level(level):
 class Blob:
     N = 72  # outline points
 
-    def __init__(self, base_radius):
+    def __init__(self, base_radius, confetti=1.0):
         self.R = base_radius
+        self.confetti_rate = min(1.0, CONFETTI_RATE * confetti)
+        self.max_particles = int(MAX_PARTICLES * confetti)
         self.x, self.y = 300.0, 200.0
         self.vx, self.vy = 220.0, 0.0
         self.hue = random.random()
@@ -564,7 +572,7 @@ class Blob:
             amp = C * 5 + jit
             self.shake = (random.gauss(0, 1) * amp, random.gauss(0, 1) * amp)
             if self.rumble > 0.2 and self.on_floor and random.random() < self.rumble * 0.5:
-                self.particles.append(Particle(
+                self.emit(Particle(
                     self.x + random.uniform(-r, r), H - 2, random.uniform(-150, 150), random.uniform(-350, -120),
                     random.uniform(0.2, 0.5), self.hue + 0.5, random.uniform(2, 4), "spark"))
             if C > 0.4 and self.hover < 0.3 and random.random() < dt * C * 1.5:
@@ -573,7 +581,7 @@ class Blob:
                 self.squash_ang = 0.0
                 for _ in range(8):
                     ang = random.uniform(0, TAU)
-                    self.particles.append(Particle(
+                    self.emit(Particle(
                         self.x, self.y, math.cos(ang) * 300, math.sin(ang) * 300,
                         0.4, self.hue + random.random(), 4, "star"))
         else:
@@ -650,13 +658,13 @@ class Blob:
 
         # trail: short when lazy, long rainbow smear when crazy
         self.trail.append((self.x, self.y, r, self.hue))
-        while len(self.trail) > int(lerp(10, 50, m)):
+        while len(self.trail) > int(lerp(6, TRAIL_MAX, m)):
             self.trail.pop(0)
 
         # continuous sparkles on treble
         if high > 0.35 and random.random() < high * 0.6 * (0.2 + 1.2 * m):
             ang = random.uniform(0, TAU)
-            self.particles.append(Particle(
+            self.emit(Particle(
                 self.x + math.cos(ang) * r, self.y + math.sin(ang) * r,
                 math.cos(ang) * 120, math.sin(ang) * 120 - 60,
                 random.uniform(0.4, 0.9), self.hue + random.uniform(0.3, 0.7), random.uniform(2, 5), "spark"))
@@ -667,7 +675,12 @@ class Blob:
             p.x += p.vx * dt
             p.y += p.vy * dt
             p.rot += dt * 6
-        self.particles = [p for p in self.particles if p.life > 0][-800:]
+        self.particles = [p for p in self.particles if p.life > 0]
+
+    def emit(self, p):
+        """Spawn a confetti particle, thinned by the confetti budget."""
+        if len(self.particles) < self.max_particles and random.random() < self.confetti_rate:
+            self.particles.append(p)
 
     def radius(self, bass):
         # inflates while a build-up charges
@@ -691,7 +704,7 @@ class Blob:
         if self.hover > 0.3:            # snare rolls in a build-up: crackle
             for _ in range(3):
                 ang = random.uniform(0, TAU)
-                self.particles.append(Particle(
+                self.emit(Particle(
                     self.x + math.cos(ang) * self.R, self.y + math.sin(ang) * self.R,
                     math.cos(ang) * 200, math.sin(ang) * 200, 0.4, self.hue + 0.5, 3, "spark"))
 
@@ -700,7 +713,7 @@ class Blob:
         if random.random() < 0.3 + 0.5 * self.mood:
             ang = random.uniform(0, TAU)
             r = self.R
-            self.particles.append(Particle(
+            self.emit(Particle(
                 self.x + math.cos(ang) * r, self.y + math.sin(ang) * r,
                 math.cos(ang) * 160, math.sin(ang) * 160 - 40,
                 random.uniform(0.25, 0.5), self.hue + random.uniform(0.3, 0.7), random.uniform(1.5, 3.5), "spark"))
@@ -724,7 +737,7 @@ class Blob:
             ang = random.uniform(0, TAU)
             sp = random.uniform(200, 1100)
             kind = random.choice(("dot", "star", "star", "tri", "squig"))
-            self.particles.append(Particle(
+            self.emit(Particle(
                 self.x, self.y, math.cos(ang) * sp, math.sin(ang) * sp,
                 random.uniform(0.8, 2.0), self.hue + random.random(), random.uniform(5, 14), kind))
         for i in range(4):
@@ -794,7 +807,7 @@ class Blob:
             ang = random.uniform(0, TAU)
             sp = random.uniform(120, 520) * (0.6 + s * 0.3) * lerp(0.6, 1.3, m)
             kind = random.choice(("dot", "dot", "star", "tri", "squig"))
-            self.particles.append(Particle(
+            self.emit(Particle(
                 self.x, self.y, math.cos(ang) * sp, math.sin(ang) * sp,
                 random.uniform(0.6, 1.5), self.hue + random.random(), random.uniform(4, 11), kind))
 
@@ -806,7 +819,7 @@ class Blob:
             dx = -nx * math.cos(spread) - (-ny) * math.sin(spread)
             dy = -ny * math.cos(spread) + (-nx) * math.sin(spread)
             sp = random.uniform(100, 350)
-            self.particles.append(Particle(
+            self.emit(Particle(
                 self.x + nx * r, self.y + ny * r, dx * sp, dy * sp,
                 random.uniform(0.3, 0.7), self.hue + 0.5, random.uniform(3, 6), "dot"))
 
@@ -1165,8 +1178,15 @@ class Overlay(Gtk.Window):
     def __init__(self, args, audio):
         super().__init__(title="soundblob")
         self.audio = audio
-        self.blob = Blob(args.size)
+        self.blob = Blob(args.size, confetti=args.confetti)
         self.last_time = None
+        # FPS counter: frames actually drawn, averaged over half-second windows
+        self.show_fps = not args.no_fps
+        self.fps = 0.0
+        self.draw_ms = 0.0
+        self._fps_frames = 0
+        self._fps_draw = 0.0
+        self._fps_since = time.perf_counter()
 
         screen = self.get_screen()
         visual = screen.get_rgba_visual()
@@ -1212,13 +1232,52 @@ class Overlay(Gtk.Window):
         return GLib.SOURCE_CONTINUE
 
     def on_draw(self, widget, cr):
+        t0 = time.perf_counter()
         cr.set_operator(cairo.OPERATOR_SOURCE)
         cr.set_source_rgba(0, 0, 0, 0)
         cr.paint()
         cr.set_operator(cairo.OPERATOR_OVER)
         self.blob.draw_flash(cr)
         self.blob.draw(cr, self.audio)
+        if self.show_fps:
+            self.draw_fps(cr)
+        t1 = time.perf_counter()
+        self._fps_frames += 1
+        self._fps_draw += t1 - t0
+        if t1 - self._fps_since >= 0.5:
+            self.fps = self._fps_frames / (t1 - self._fps_since)
+            self.draw_ms = self._fps_draw / self._fps_frames * 1000
+            self._fps_frames, self._fps_draw, self._fps_since = 0, 0.0, t1
         return False
+
+    def draw_fps(self, cr):
+        """Small readout in the bottom-right corner: fps, CPU draw time, confetti count."""
+        W, H = self.get_allocated_width(), self.get_allocated_height()
+        text = f"{self.fps:3.0f} fps  {self.draw_ms:4.1f} ms  {len(self.blob.particles):3d} confetti"
+        cr.select_font_face("monospace", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
+        cr.set_font_size(13)
+        ext = cr.text_extents(text)
+        pad = 7
+        w, h = ext.x_advance + 2 * pad, 13 + 2 * pad
+        x, y = W - w - 16, H - h - 16
+        r = 6
+        cr.new_path()
+        cr.arc(x + w - r, y + r, r, -math.pi / 2, 0)
+        cr.arc(x + w - r, y + h - r, r, 0, math.pi / 2)
+        cr.arc(x + r, y + h - r, r, math.pi / 2, math.pi)
+        cr.arc(x + r, y + r, r, math.pi, 1.5 * math.pi)
+        cr.close_path()
+        cr.set_source_rgba(0, 0, 0, 0.6)
+        cr.fill()
+        # green when smooth, amber when struggling, red when choppy
+        if self.fps >= 50:
+            cr.set_source_rgb(0.45, 1.0, 0.55)
+        elif self.fps >= 30:
+            cr.set_source_rgb(1.0, 0.8, 0.3)
+        else:
+            cr.set_source_rgb(1.0, 0.4, 0.4)
+        cr.move_to(x + pad, y + pad + 11)
+        cr.show_text(text)
 
 
 def main():
@@ -1229,6 +1288,9 @@ def main():
     ap.add_argument("--size", type=float, default=70, help="blob base radius in px (default 70)")
     ap.add_argument("--layer", choices=("overlay", "top", "bottom"), default="overlay",
                     help="overlay = above everything; bottom = only on the bare desktop/wallpaper")
+    ap.add_argument("--confetti", type=float, default=1.0,
+                    help="confetti amount: 0 = none, 1 = default, 2 = double (more costs CPU)")
+    ap.add_argument("--no-fps", action="store_true", help="hide the FPS readout")
     ap.add_argument("--debug", action="store_true",
                     help="print what the analyzer hears (tempo, drums, mood...) once a second")
     args = ap.parse_args()

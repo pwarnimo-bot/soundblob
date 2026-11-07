@@ -24,17 +24,31 @@ Python 3, numpy, PyGObject (GTK 3), pycairo, gtk-layer-shell, and `parec`
 ## Usage
 
 ```sh
-./soundblob.py              # run
-./soundblob.py --size 100   # bigger blob
+./soundblob.py                  # run
+./soundblob.py --size 100       # bigger blob (default radius 70 px)
 ./soundblob.py --layer bottom   # only on the bare desktop, behind windows
-./soundblob.py --debug      # print what the analyzer hears once a second
+./soundblob.py --confetti 0.5   # less confetti (0 = none, 1 = default, 2 = double)
+./soundblob.py --no-fps         # start with the FPS readout hidden
+./soundblob.py --debug          # print what the analyzer hears once a second
 ```
 
-To add a sway toggle keybinding:
+The FPS readout in the bottom-right corner shows frames per second, CPU draw time per
+frame, and how much confetti is on screen. It turns amber below 50 fps and red below 30.
+Confetti is the main CPU cost (about 0.02 ms per particle per frame), so lower `--confetti`
+if the readout goes amber.
+
+### Sway keybindings
+
+The overlay never takes keyboard focus, so hotkeys go through sway. Super+Shift+B toggles
+the blob on and off. Super+Shift+F shows or hides the FPS readout (it sends `SIGUSR1`):
 
 ```
 bindsym $mod+Shift+b exec pkill -f '^python3 \S*soundblob\.py( |$)' || /path/to/soundblob.py
+bindsym $mod+Shift+f exec pkill -USR1 -f '^python3 \S*soundblob\.py( |$)'
 ```
+
+The pattern is anchored on purpose. A loose `pkill -f soundblob.py` also matches the
+`sh -c` that sway runs the binding in, plus any editor that has the file open.
 
 Calibration constants (mood weights, distortion thresholds, kick/snare gating) are
 at the top of `soundblob.py`.

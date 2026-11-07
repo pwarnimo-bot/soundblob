@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""
+r"""
 soundblob — a colorful, weird, googly-eyed blob that bounces around your
 desktop to whatever music is playing.
 
@@ -7,7 +7,8 @@ desktop to whatever music is playing.
 * FFT + beat detection -> jumps, squish, spectrum-shaped wobble, particle bursts
 * Transparent, click-through Wayland layer-shell overlay (sway/wlroots)
 
-Quit with Ctrl+C in the terminal, or: pkill -f soundblob.py
+Quit with Ctrl+C in the terminal, or: pkill -f '^python3 \S*soundblob\.py( |$)'
+Toggle the FPS readout: pkill -USR1 -f '^python3 \S*soundblob\.py( |$)'
 """
 import argparse
 import collections
@@ -1314,6 +1315,13 @@ def main():
         add_signal = GLib.unix_signal_add
     for sig in (signal.SIGINT, signal.SIGTERM):
         add_signal(GLib.PRIORITY_DEFAULT, sig, Gtk.main_quit)
+
+    # The overlay never takes keyboard focus, so a hotkey sends a signal instead:
+    #   pkill -USR1 -f '^python3 \S*soundblob\.py( |$)'   -> toggle the FPS readout
+    def toggle_fps():
+        win.show_fps = not win.show_fps
+        return GLib.SOURCE_CONTINUE
+    add_signal(GLib.PRIORITY_DEFAULT, signal.SIGUSR1, toggle_fps)
     Gtk.main()
     audio.running = False
 

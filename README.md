@@ -10,6 +10,7 @@ wlroots compositors.
 - Detects kicks, snares and hi-hats separately, tracks tempo, and spots breakdowns and drops.
 - Mood ranges from lazy (droopy eyelids, yawns) to crazy (spinning pupils, teeth, strobing).
   It follows loudness, drum density, tempo and guitar distortion.
+- A rainbow oscilloscope line across the middle of the screen shows the live waveform.
 - Genre flavours:
   - **Rock/metal:** headbangs on the snare, grows devil horns when guitars are distorted,
     rumbles on double bass.
@@ -29,6 +30,7 @@ Python 3, numpy, PyGObject (GTK 3), pycairo, gtk-layer-shell, and `parec`
 ./soundblob.py --layer bottom   # only on the bare desktop, behind windows
 ./soundblob.py --confetti 0.5   # less confetti (0 = none, 1 = default, 2 = double)
 ./soundblob.py --no-fps         # start with the FPS readout hidden
+./soundblob.py --no-scope       # start with the oscilloscope hidden
 ./soundblob.py --debug          # print what the analyzer hears once a second
 ```
 
@@ -40,11 +42,13 @@ if the readout goes amber.
 ### Sway keybindings
 
 The overlay never takes keyboard focus, so hotkeys go through sway. Super+Shift+B toggles
-the blob on and off. Super+Shift+F shows or hides the FPS readout (it sends `SIGUSR1`):
+the blob on and off. Super+Shift+F shows or hides the FPS readout (it sends `SIGUSR1`), and
+Super+Shift+O shows or hides the oscilloscope (it sends `SIGUSR2`):
 
 ```
 bindsym $mod+Shift+b exec pkill -f '^python3 \S*soundblob\.py( |$)' || /path/to/soundblob.py
 bindsym $mod+Shift+f exec pkill -USR1 -f '^python3 \S*soundblob\.py( |$)'
+bindsym $mod+Shift+o exec pkill -USR2 -f '^python3 \S*soundblob\.py( |$)'
 ```
 
 The pattern is anchored on purpose. A loose `pkill -f soundblob.py` also matches the

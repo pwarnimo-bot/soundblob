@@ -9,6 +9,7 @@ desktop to whatever music is playing.
 
 Quit with Ctrl+C in the terminal, or: pkill -f '^python3 \S*soundblob\.py( |$)'
 Toggle the FPS readout: pkill -USR1 -f '^python3 \S*soundblob\.py( |$)'
+Toggle the oscilloscope: pkill -USR2 -f '^python3 \S*soundblob\.py( |$)'
 """
 import argparse
 import collections
@@ -45,6 +46,8 @@ FPS = RATE / CHUNK   # analysis frames per second (~86)
 # --confetti scales both (0 = none, 1 = default, 2 = double).
 CONFETTI_RATE = 0.35      # fraction of requested particles that actually spawn
 MAX_PARTICLES = 120       # hard cap on live particles
+SCOPE_SAMPLES = 1024      # oscilloscope window (~23 ms of audio)
+SCOPE_PIECES = 16         # rainbow colour segments along the scope line
 TRAIL_MAX = 18            # ghost-trail circles at full craziness (each is a big translucent fill)
 
 # Mood calibration, measured on real rock/metal recordings and synthetic techno/psytrance.
@@ -213,8 +216,10 @@ class Audio(threading.Thread):
     def process(self, samples):
         now = time.monotonic()
         self.frame += 1
-        self.buf = np.roll(self.buf, -len(samples))
-        self.buf[-len(samples):] = samples
+        # build the new buffer fully before publishing it: the UI thread reads it for the scope
+        buf = np.roll(self.buf, -len(samples))
+        buf[-len(samples):] = samples
+        self.buf = buf
         mag = np.abs(np.fft.rfft(self.buf * self.window))
 
         rms = float(np.sqrt(np.mean(samples ** 2)))
@@ -1183,6 +1188,8 @@ class Overlay(Gtk.Window):
         self.last_time = None
         # FPS counter: frames actually drawn, averaged over half-second windows
         self.show_fps = not args.no_fps
+        self.show_scope = not args.no_scope
+        self.scope_gain = 0.0
         self.fps = 0.0
         self.draw_ms = 0.0
         self._fps_frames = 0
@@ -1239,6 +1246,8 @@ class Overlay(Gtk.Window):
         cr.paint()
         cr.set_operator(cairo.OPERATOR_OVER)
         self.blob.draw_flash(cr)
+        if self.show_scope:
+            self.draw_scope(cr)
         self.blob.draw(cr, self.audio)
         if self.show_fps:
             self.draw_fps(cr)
@@ -1250,6 +1259,44 @@ class Overlay(Gtk.Window):
             self.draw_ms = self._fps_draw / self._fps_frames * 1000
             self._fps_frames, self._fps_draw, self._fps_since = 0, 0.0, t1
         return False
+
+    def draw_scope(self, cr):
+        """Oscilloscope: the latest ~23 ms of audio as a rainbow line across the middle."""
+        W, H = self.get_allocated_width(), self.get_allocated_height()
+        buf = self.audio.buf                      # grab the reference once (audio thread swaps it)
+        n = SCOPE_SAMPLES
+        # trigger on the latest rising zero crossing that still leaves n samples,
+        # so the waveform stands still instead of sliding around
+        head = buf[:len(buf) - n + 1]
+        cross = np.flatnonzero((head[:-1] < 0) & (head[1:] >= 0))
+        start = int(cross[-1]) + 1 if len(cross) else len(buf) - n
+        wave = buf[start:start + n]
+        # auto gain: loud parts swing about +-15% of the screen height
+        target = H * 0.15 / max(self.audio.peak * 2.5, 0.01)
+        self.scope_gain += (target - self.scope_gain) * 0.1
+        pts = max(64, min(W // 6, n))             # ~1 point per 6 px: smooth enough, cheap
+        idx = np.linspace(0, n - 1, pts).astype(int)
+        ys = H / 2 - np.clip(wave[idx] * self.scope_gain, -H * 0.3, H * 0.3)
+        xs = np.linspace(0, W, pts)
+
+        # Rainbow made of solid-colour pieces: a gradient source or a wide glow stroke
+        # costs 2-5x more CPU in cairo (measured), so the line stays crisp and thin.
+        hue = self.blob.hue
+        level = min(self.audio.level, 1.0)
+        cr.save()
+        cr.set_line_join(cairo.LINE_JOIN_BEVEL)
+        cr.set_line_cap(cairo.LINE_CAP_ROUND)
+        cr.set_line_width(2.0 + 1.5 * level)
+        pieces = SCOPE_PIECES
+        step = (pts - 1) / pieces
+        for c in range(pieces):
+            i0, i1 = int(c * step), int((c + 1) * step)
+            cr.move_to(xs[i0], ys[i0])
+            for k in range(i0 + 1, i1 + 1):
+                cr.line_to(xs[k], ys[k])
+            cr.set_source_rgba(*hsv(hue + c / pieces * 0.6), 0.95)
+            cr.stroke()
+        cr.restore()
 
     def draw_fps(self, cr):
         """Small readout in the bottom-right corner: fps, CPU draw time, confetti count."""
@@ -1292,6 +1339,7 @@ def main():
     ap.add_argument("--confetti", type=float, default=1.0,
                     help="confetti amount: 0 = none, 1 = default, 2 = double (more costs CPU)")
     ap.add_argument("--no-fps", action="store_true", help="hide the FPS readout")
+    ap.add_argument("--no-scope", action="store_true", help="hide the oscilloscope line")
     ap.add_argument("--debug", action="store_true",
                     help="print what the analyzer hears (tempo, drums, mood...) once a second")
     args = ap.parse_args()
@@ -1322,6 +1370,12 @@ def main():
         win.show_fps = not win.show_fps
         return GLib.SOURCE_CONTINUE
     add_signal(GLib.PRIORITY_DEFAULT, signal.SIGUSR1, toggle_fps)
+
+    #   pkill -USR2 -f '^python3 \S*soundblob\.py( |$)'   -> toggle the oscilloscope
+    def toggle_scope():
+        win.show_scope = not win.show_scope
+        return GLib.SOURCE_CONTINUE
+    add_signal(GLib.PRIORITY_DEFAULT, signal.SIGUSR2, toggle_scope)
     Gtk.main()
     audio.running = False
 

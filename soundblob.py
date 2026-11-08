@@ -73,6 +73,7 @@ LOUD_RISE, LOUD_FALL, LOUD_RESET_SILENCE = 5.0, 40.0, 1.0
 # "heavy" (dark body + pentagram): distortion above the horns' range, at the song's loud parts
 HEAVY_AGGR_LO, HEAVY_AGGR_HI = 0.55, 0.85
 DARK = (0.07, 0.0, 0.02)   # the colour a fully heavy blob fades to
+VIGNETTE_ALPHA = 0.65      # darkness of the screen corners at full heaviness
 
 
 # --------------------------------------------------------------------------- audio
@@ -1290,6 +1291,8 @@ class Overlay(Gtk.Window):
         # FPS counter: frames actually drawn, averaged over half-second windows
         self.show_fps = not args.no_fps
         self.show_scope = not args.no_scope
+        self.show_vignette = not args.no_vignette
+        self._vignette = None      # (W, H, surface): the gradient is rendered once per size
         self.scope_gain = 0.0
         self.fps = 0.0
         self.draw_ms = 0.0
@@ -1346,6 +1349,8 @@ class Overlay(Gtk.Window):
         cr.set_source_rgba(0, 0, 0, 0)
         cr.paint()
         cr.set_operator(cairo.OPERATOR_OVER)
+        if self.show_vignette:
+            self.draw_vignette(cr)
         self.blob.draw_flash(cr)
         if self.show_scope:
             self.draw_scope(cr)
@@ -1360,6 +1365,29 @@ class Overlay(Gtk.Window):
             self.draw_ms = self._fps_draw / self._fps_frames * 1000
             self._fps_frames, self._fps_draw, self._fps_since = 0, 0.0, t1
         return False
+
+    def draw_vignette(self, cr):
+        """Dark edges creeping in from the screen corners when the music gets heavy."""
+        h = self.blob.heavy
+        if h < 0.01:
+            return
+        W, H = self.get_allocated_width(), self.get_allocated_height()
+        if self._vignette is None or self._vignette[:2] != (W, H):
+            # a full-screen gradient is expensive in cairo, so render it once and reuse it
+            surf = cairo.ImageSurface(cairo.FORMAT_ARGB32, W, H)
+            c = cairo.Context(surf)
+            c.translate(W / 2, H / 2)
+            c.scale(W / 2, H / 2)                 # unit circle -> ellipse that fits the screen
+            grad = cairo.RadialGradient(0, 0, 0, 0, 0, math.sqrt(2))
+            grad.add_color_stop_rgba(0.0, *DARK, 0.0)
+            grad.add_color_stop_rgba(0.45, *DARK, 0.0)
+            grad.add_color_stop_rgba(0.75, *DARK, 0.45)
+            grad.add_color_stop_rgba(1.0, *DARK, 1.0)
+            c.set_source(grad)
+            c.paint()
+            self._vignette = (W, H, surf)
+        cr.set_source_surface(self._vignette[2], 0, 0)
+        cr.paint_with_alpha(VIGNETTE_ALPHA * h * (0.9 + 0.1 * self.blob.penta_pulse))
 
     def draw_scope(self, cr):
         """Oscilloscope: the latest ~23 ms of audio as a rainbow line across the middle."""
@@ -1441,6 +1469,8 @@ def main():
                     help="confetti amount: 0 = none, 1 = default, 2 = double (more costs CPU)")
     ap.add_argument("--no-fps", action="store_true", help="hide the FPS readout")
     ap.add_argument("--no-scope", action="store_true", help="hide the oscilloscope line")
+    ap.add_argument("--no-vignette", action="store_true",
+                    help="don't darken the screen edges when the music gets heavy")
     ap.add_argument("--debug", action="store_true",
                     help="print what the analyzer hears (tempo, drums, mood...) once a second")
     args = ap.parse_args()

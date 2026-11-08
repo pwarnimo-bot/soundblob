@@ -14,7 +14,8 @@ wlroots compositors.
 - Genre flavours:
   - **Rock/metal:** headbangs on the snare, grows devil horns when guitars are distorted,
     rumbles on double bass. When it gets really heavy, the body turns dark, the brows go
-    red and angry, and an inverted pentagram glows on its forehead, flaring with the drums.
+    red and angry, an inverted pentagram glows on its forehead, flaring with the drums,
+    and darkness creeps in from the screen edges.
   - **Techno/psytrance:** jumps that land on the kick, hovers during breakdowns, spiral eyes
     in build-ups, and explodes on the drop.
 
@@ -32,13 +33,15 @@ Python 3, numpy, PyGObject (GTK 3), pycairo, gtk-layer-shell, and `parec`
 ./soundblob.py --confetti 0.5   # less confetti (0 = none, 1 = default, 2 = double)
 ./soundblob.py --no-fps         # start with the FPS readout hidden
 ./soundblob.py --no-scope       # start with the oscilloscope hidden
+./soundblob.py --no-vignette    # never darken the screen edges
 ./soundblob.py --debug          # print what the analyzer hears once a second
 ```
 
 The FPS readout in the bottom-right corner shows frames per second, CPU draw time per
 frame, and how much confetti is on screen. It turns amber below 50 fps and red below 30.
 Confetti is the main CPU cost (about 0.02 ms per particle per frame), so lower `--confetti`
-if the readout goes amber.
+if the readout goes amber. The dark screen edges cost about 3 ms per frame at 1080p
+while the music is heavy (nothing otherwise); `--no-vignette` turns them off.
 
 ### Sway keybindings
 

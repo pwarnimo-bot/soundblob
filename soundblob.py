@@ -70,6 +70,9 @@ W_METAL = 0.30     # distortion + fast kicks: thrash / double bass / blast beats
 KICK_LOWNESS, SNARE_LOWNESS = 8.0, 6.0
 # loudness reference (seconds): rise, fall, and silence that marks a song change
 LOUD_RISE, LOUD_FALL, LOUD_RESET_SILENCE = 5.0, 40.0, 1.0
+# "heavy" (dark body + pentagram): distortion above the horns' range, at the song's loud parts
+HEAVY_AGGR_LO, HEAVY_AGGR_HI = 0.55, 0.85
+DARK = (0.07, 0.0, 0.02)   # the colour a fully heavy blob fades to
 
 
 # --------------------------------------------------------------------------- audio
@@ -525,6 +528,8 @@ class Blob:
         self.nod = 0.0             # headbang on the snare (rock/metal)
         self.nod_side = 1
         self.horns = 0.0           # grow with distorted guitars (metal)
+        self.heavy = 0.0           # really heavy riffs: body goes dark, pentagram on the forehead
+        self.penta_pulse = 0.0     # pentagram flares on kicks and snares
         self.rumble = 0.0          # double-bass / blast-beat vibration
         self.hover = 0.0           # floats during breakdowns (techno/psy)
         self.spiral = 0.0          # hypnotic eyes during build-ups (psy)
@@ -561,6 +566,13 @@ class Blob:
         self.horns += (clamp01((a.aggression - 0.45) / 0.35) - self.horns) * min(1, dt * 0.8)
         self.rumble += (clamp01((a.kick_rate - 3.5) / 3) * clamp01(a.aggression * 2) * (1 - bd)
                         - self.rumble) * min(1, dt * 3)
+        heavy = (clamp01((a.aggression - HEAVY_AGGR_LO) / (HEAVY_AGGR_HI - HEAVY_AGGR_LO)) *
+                 clamp01((a.loud_rel - 0.45) / 0.3) * (1 - bd))
+        if quiet_level(level):
+            heavy = 0.0
+        # darkness creeps in over ~1.5 s and lifts more slowly
+        self.heavy += (heavy - self.heavy) * min(1, dt * (0.7 if heavy > self.heavy else 0.35))
+        self.penta_pulse = max(0.0, self.penta_pulse - dt * 4)
         self.nod = max(0.0, self.nod - dt * 7)
         self.flash = max(0.0, self.flash - dt * 3)
 
@@ -725,6 +737,11 @@ class Blob:
             p.rot += dt * 6
         self.particles = [p for p in self.particles if p.life > 0]
 
+    def dark(self, rgb, k=0.85):
+        """Fade a colour toward DARK as the music gets heavy."""
+        t = self.heavy * k
+        return tuple(c + (d - c) * t for c, d in zip(rgb, DARK))
+
     def emit(self, p):
         """Spawn a confetti particle, thinned by the confetti budget."""
         if len(self.particles) < self.max_particles and random.random() < self.confetti_rate:
@@ -735,6 +752,7 @@ class Blob:
         return self.R * (1 + min(bass, 2.0) * 0.18) * (1 + 0.3 * self.charge)
 
     def on_kick(self, strength, W, H, a):
+        self.penta_pulse = max(self.penta_pulse, 0.6)
         if self.hover > 0.5:
             # floating in a breakdown: kicks just make it pulse
             self.squash_v += 1.5
@@ -744,6 +762,7 @@ class Blob:
     def on_snare(self, strength):
         """Headbang! Body nods down, face dips, little sideways shove."""
         s = min(strength, 3.0)
+        self.penta_pulse = 1.0
         self.nod = min(1.0, 0.5 + 0.25 * s)
         self.squash_v += 1.5 + s * (0.5 + self.horns)
         self.squash_ang = -math.pi / 2
@@ -919,7 +938,7 @@ class Blob:
         n = len(self.trail)
         for i, (tx, ty, tr, th) in enumerate(self.trail[:-1]):
             f = i / n
-            cr.set_source_rgba(*hsv(th + f * 0.5 + 0.3, sat, 1), f * 0.22)
+            cr.set_source_rgba(*self.dark(hsv(th + f * 0.5 + 0.3, sat, 1)), f * 0.22)
             cr.arc(tx, ty, tr * (0.35 + f * 0.6), 0, TAU)
             cr.fill()
 
@@ -938,7 +957,9 @@ class Blob:
             cr.scale(k, k)
             cr.translate(-self.x, -self.y)
             smooth_closed_path(cr, pts)
-            cr.set_source_rgba(*hsv(self.hue + 0.5, sat), al + a.level * 0.08 + self.crazy * 0.08)
+            glow = hsv(self.hue + 0.5, sat)
+            glow = tuple(lerp(c, d, self.heavy) for c, d in zip(glow, (0.75, 0.0, 0.05)))
+            cr.set_source_rgba(*glow, al + a.level * 0.08 + self.crazy * 0.08)
             cr.fill()
             cr.restore()
 
@@ -946,9 +967,9 @@ class Blob:
         smooth_closed_path(cr, pts)
         grad = cairo.RadialGradient(self.x - r * 0.35, self.y - r * 0.4, r * 0.05,
                                     self.x, self.y, r * 1.35)
-        grad.add_color_stop_rgba(0, *hsv(self.hue + 0.12, 0.35 * sat, 1), 1)
-        grad.add_color_stop_rgba(0.45, *hsv(self.hue, sat, 1), 1)
-        grad.add_color_stop_rgba(1, *hsv(self.hue - 0.18, sat, 0.55), 1)
+        grad.add_color_stop_rgba(0, *self.dark(hsv(self.hue + 0.12, 0.35 * sat, 1), 0.75), 1)
+        grad.add_color_stop_rgba(0.45, *self.dark(hsv(self.hue, sat, 1)), 1)
+        grad.add_color_stop_rgba(1, *self.dark(hsv(self.hue - 0.18, sat, 0.55), 1.0), 1)
         cr.set_source(grad)
         cr.fill_preserve()
 
@@ -960,7 +981,7 @@ class Blob:
             ang = self.spin * (1 if j % 2 else -0.7) + j * TAU / 6 + math.sin(at + j) * 0.5
             dist = r * (0.35 + 0.25 * math.sin(at * 1.3 + j * 2))
             sr = r * (0.18 + 0.12 * a.spectrum[(j * 5) % 32])
-            cr.set_source_rgba(*hsv(self.hue + 0.25 + j * 0.13, 0.9 * sat, 1), 0.55)
+            cr.set_source_rgba(*self.dark(hsv(self.hue + 0.25 + j * 0.13, 0.9 * sat, 1), 0.9), 0.55)
             cr.arc(self.x + math.cos(ang) * dist, self.y + math.sin(ang) * dist, sr, 0, TAU)
             cr.fill()
         cr.restore()
@@ -969,8 +990,8 @@ class Blob:
         cr.set_source_rgba(*hsv(self.hue + 0.5, 1, 0.25), 0.9)
         cr.stroke()
 
-        # shine
-        cr.set_source_rgba(1, 1, 1, 0.35)
+        # shine (dull when dark)
+        cr.set_source_rgba(1, 1, 1, 0.35 * (1 - 0.6 * self.heavy))
         cr.save()
         cr.translate(self.x - r * 0.35, self.y - r * 0.45)
         cr.rotate(-0.6)
@@ -1037,10 +1058,14 @@ class Blob:
             self.draw_eye(cr, ex_, ey_, er, p, lid, a, idx=i)
             self.draw_brow(cr, ex_, ey_, er, r, side=-1 if i == 0 else 1, idx=i)
 
-        if self.third_eye > 0.01:
-            s = min(1, self.third_eye * 2)
+        # forehead: the third eye gives way to a pentagram when it gets heavy
+        third = self.third_eye * clamp01(1 - self.heavy * 2)
+        if third > 0.01:
+            s = min(1, third * 2)
             self.draw_eye(cr, self.x, face_y - r * 0.5, r * 0.16 * s, self.pupils[0], 0, a,
                           hue_eye=True, idx=2)
+        if self.heavy > 0.15:
+            self.draw_pentagram(cr, self.x, face_y - r * 0.7, r * 0.2)
 
         # mouth: opens with volume; small & lopsided when lazy, huge grin when crazy
         mw = r * 0.42 * lerp(0.6, 1.25, m) * (1 - yawn_open * 0.45)
@@ -1094,20 +1119,54 @@ class Blob:
                 cr.move_to(self.x + r * (0.6 + ph * 0.6), self.y - r * (0.7 + ph * 1.1))
                 cr.show_text("z")
 
+    def draw_pentagram(self, cr, x, y, size):
+        """Inverted pentagram in a circle, glowing red; flares on kicks and snares."""
+        vis = clamp01((self.heavy - 0.15) / 0.45)
+        size *= 0.6 + 0.4 * vis
+        pulse = self.penta_pulse
+        # points: start at the bottom (inverted), then every second vertex
+        pts = [(x + math.cos(math.pi / 2 + k * 2 * TAU / 5) * size,
+                y + math.sin(math.pi / 2 + k * 2 * TAU / 5) * size) for k in range(5)]
+
+        def shape():
+            cr.new_path()
+            cr.arc(x, y, size * 1.12, 0, TAU)
+            cr.new_sub_path()
+            cr.move_to(*pts[0])
+            for p in pts[1:]:
+                cr.line_to(*p)
+            cr.close_path()
+
+        cr.save()
+        cr.set_line_join(cairo.LINE_JOIN_MITER)
+        cr.set_line_cap(cairo.LINE_CAP_ROUND)
+        # burnt-in glow underneath, then the hot core line
+        shape()
+        cr.set_line_width(size * (0.3 + 0.2 * pulse))
+        cr.set_source_rgba(0.9, 0.05, 0.0, vis * (0.22 + 0.3 * pulse))
+        cr.stroke()
+        shape()
+        cr.set_line_width(max(1.5, size * 0.1))
+        cr.set_source_rgba(1.0, 0.15 + 0.55 * pulse, 0.05 + 0.25 * pulse, vis)
+        cr.stroke()
+        cr.restore()
+
     def draw_brow(self, cr, x, y, er, r, side, idx):
         """Eyebrows: low and drooping when lazy, high and twitching when crazy."""
         L, C, m = self.lazy, self.crazy, self.mood
         lift = er * (lerp(-0.1, 0.45, m) + 0.25 * C * math.sin(self.t * 25 + idx * 1.7))
         by = y - er * 1.3 - lift
         w = er * 0.9
-        outer_dy = er * (0.45 * L - 0.5 * C * (1 if idx == 0 else -0.4))
+        outer_dy = er * (0.45 * L - 0.5 * C * (1 if idx == 0 else -0.4)
+                         - 0.6 * self.heavy)                  # heavy: angry V
         ox, ix = x + side * w, x - side * w
         oy, iy = by + outer_dy, by - outer_dy * 0.3
         cr.move_to(ox, oy)
         cr.curve_to(ox - side * w * 0.5, by - er * 0.2, ix + side * w * 0.5, by - er * 0.2, ix, iy)
         cr.set_line_cap(cairo.LINE_CAP_ROUND)
         cr.set_line_width(max(3, r * 0.07))
-        cr.set_source_rgba(*hsv(self.hue + 0.5, 1, 0.2), 0.95)
+        brow = hsv(self.hue + 0.5, 1, 0.2)
+        cr.set_source_rgba(*(lerp(c, d, self.heavy) for c, d in zip(brow, (0.7, 0.04, 0.02))), 0.95)
         cr.stroke()
 
     def draw_eye(self, cr, x, y, er, p, lid, a, hue_eye=False, idx=0):
@@ -1163,7 +1222,7 @@ class Blob:
             cr.clip()
             lid_h = (2 * er + 4) * lid
             cr.rectangle(x - er - 2, y - er - 2, 2 * er + 4, lid_h)
-            cr.set_source_rgba(*hsv(self.hue, 1, 0.8), 1)
+            cr.set_source_rgba(*self.dark(hsv(self.hue, 1, 0.8)), 1)
             cr.fill()
             # lid edge
             cr.move_to(x - er - 2, y - er - 2 + lid_h)

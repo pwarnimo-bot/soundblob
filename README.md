@@ -13,7 +13,8 @@ wlroots compositors.
 - A rainbow oscilloscope line across the middle of the screen shows the live waveform.
 - Genre flavours:
   - **Rock/metal:** headbangs on the snare, grows devil horns when guitars are distorted,
-    rumbles on double bass.
+    rumbles on double bass. When it gets really heavy, the body turns dark, the brows go
+    red and angry, and an inverted pentagram glows on its forehead, flaring with the drums.
   - **Techno/psytrance:** jumps that land on the kick, hovers during breakdowns, spiral eyes
     in build-ups, and explodes on the drop.
 

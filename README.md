@@ -18,6 +18,10 @@ wlroots compositors.
     and darkness creeps in from the screen edges.
   - **Techno/psytrance:** jumps that land on the kick, hovers during breakdowns, spiral eyes
     in build-ups, and explodes on the drop.
+  - **Mellow (acoustic, ballads, quiet grunge):** calm music with clean guitars makes it
+    smile with rosy cheeks, rock its head and drift side to side with the beat, bop instead
+    of jumping, close its eyes in bliss now and then, and float little music notes. Distorted
+    guitars or high energy break the spell.
 
 ## Requirements
 

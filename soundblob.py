@@ -74,6 +74,10 @@ LOUD_RISE, LOUD_FALL, LOUD_RESET_SILENCE = 5.0, 40.0, 1.0
 HEAVY_AGGR_LO, HEAVY_AGGR_HI = 0.55, 0.85
 DARK = (0.07, 0.0, 0.02)   # the colour a fully heavy blob fades to
 VIGNETTE_ALPHA = 0.65      # darkness of the screen corners at full heaviness
+# "mellow" (smile, rosy cheeks, gentle sway): clean guitars at low energy (acoustic, ballads,
+# quiet grunge). Fully mellow below MELLOW_E_LO energy, gone above MELLOW_E_HI or with distortion.
+MELLOW_E_LO, MELLOW_E_HI = 0.28, 0.48
+MELLOW_AGGR = 0.35
 
 
 # --------------------------------------------------------------------------- audio
@@ -213,6 +217,7 @@ class Audio(threading.Thread):
         self._silent_frames = 0
         self.loud_rel = 1.0
         self.energy = 0.4          # 0 = lazy, 0.5 = normal, 1 = crazy
+        self.mellow = 0.0          # calm, clean music playing: the blob smiles and sways
         self.parts = {}            # weighted mood ingredients (for --debug)
         self.running = True
 
@@ -429,6 +434,15 @@ class Audio(threading.Thread):
             raw = 0.0
         self.energy += (raw - self.energy) * (0.03 if raw > self.energy else 0.01)
 
+        # mellow: calm, clean (undistorted) music that is actually playing,
+        # not a techno breakdown waiting for its drop
+        calm = clip01((MELLOW_E_HI - self.energy) / (MELLOW_E_HI - MELLOW_E_LO))
+        clean = 1 - clip01(self.aggression / MELLOW_AGGR)
+        target = calm * clean
+        if self.short_rms < 0.003 or self.groove_break:
+            target = 0.0
+        self.mellow += (target - self.mellow) * 0.005           # ~2.5 s
+
     def song_change(self):
         """>1 s of silence: a new song starts. Every adaptive level (auto gain,
         drum thresholds, loudness reference, tempo) starts over, so a quieter
@@ -448,7 +462,7 @@ class Audio(threading.Thread):
                 f"snare/s={self.snare_rate:4.1f} onset/s={self.onset_rate:4.1f} "
                 f"flat={self.flatness:.3f} aggr={self.aggression:.2f} loud={self.loud_rel:.2f} "
                 f"bd={'Y' if self.groove_break else ('i' if self.breakdown else '-')} build={self.build:.2f} "
-                f"drops={self.drops} energy={self.energy:.2f} ["
+                f"drops={self.drops} energy={self.energy:.2f} mellow={self.mellow:.2f} ["
                 + " ".join(f"{k}={v:.2f}" for k, v in self.parts.items()) + "]")
 
 
@@ -538,6 +552,9 @@ class Blob:
         self.drop_boost = 0.0      # forced craziness after a drop
         self.flash = 0.0           # screen flash on the drop
         self.land_at = 0.0         # when a beat-synced jump will touch down
+        self.mellow = 0.0          # smiles, blushes and sways to calm music
+        self.sway = 0.0            # sway phase (one side-to-side swing per two beats)
+        self.bliss = 0.0           # 1 -> 0 while it closes its eyes, enjoying the song
 
     @property
     def lazy(self):
@@ -576,6 +593,11 @@ class Blob:
         self.penta_pulse = max(0.0, self.penta_pulse - dt * 4)
         self.nod = max(0.0, self.nod - dt * 7)
         self.flash = max(0.0, self.flash - dt * 3)
+        mel = 0.0 if quiet_level(level) else a.mellow
+        self.mellow += (mel - self.mellow) * min(1, dt * 1.2)
+        M = self.mellow
+        P = a.beat_period
+        self.sway += dt * (math.pi / P if P else 1.4)
 
         self.g = lerp(1100.0, 2500.0, m) * (1 - 0.8 * self.hover)   # lazy/breakdown floats, crazy snaps
         r = self.radius(bass)
@@ -624,6 +646,8 @@ class Blob:
         jit = self.charge * 7 + self.rumble * 5
         # wobbly mid-air drift with the mids — it wanders
         self.vx += math.sin(self.t * 1.7) * a.mid * 400 * (0.3 + 1.4 * m) * dt
+        # mellow: drifts gently from side to side with the music
+        self.vx += math.cos(self.sway) * M * 160 * dt
 
         # crazy: jittery shakes and sudden mid-air direction zaps
         if C > 0 or jit > 0.05:
@@ -707,8 +731,14 @@ class Blob:
         # yawns when the music is mellow
         if self.yawn > 0:
             self.yawn = max(0, self.yawn - dt / 2.8)
-        elif L > 0.6 and not quiet and random.random() < dt * 0.07:
-            self.yawn = 1.0
+        elif L > 0.6 and not quiet and random.random() < dt * 0.07 * (1 - M):
+            self.yawn = 1.0   # bored, not when it's enjoying a mellow song
+
+        # mellow: now and then closes its eyes in bliss for a few seconds
+        if self.bliss > 0:
+            self.bliss = max(0, self.bliss - dt / 3.5)
+        elif M > 0.6 and self.yawn == 0 and random.random() < dt * 0.08:
+            self.bliss = 1.0
 
         self.third_eye = max(0, self.third_eye - dt * 0.5)
         if C > 0.7:
@@ -730,9 +760,19 @@ class Blob:
                 math.cos(ang) * 120, math.sin(ang) * 120 - 60,
                 random.uniform(0.4, 0.9), self.hue + random.uniform(0.3, 0.7), random.uniform(2, 5), "spark"))
 
+        # mellow: little music notes drift up from the blob
+        if M > 0.3 and level > 0.1 and random.random() < dt * 2.0 * M:
+            self.emit(Particle(
+                self.x + random.uniform(-0.6, 0.6) * r, self.y - r * 0.8,
+                random.uniform(-25, 25), random.uniform(-70, -40),
+                random.uniform(2.0, 3.0), self.hue + random.uniform(0.3, 0.7), r * 0.3, "note"))
+
         for p in self.particles:
             p.life -= dt
-            p.vy += (500 if p.kind != "ring" else 0) * dt
+            if p.kind == "note":
+                p.vx += math.sin(self.t * 2 + p.rot) * 40 * dt   # lazy wobble, no gravity
+            elif p.kind != "ring":
+                p.vy += 500 * dt
             p.x += p.vx * dt
             p.y += p.vy * dt
             p.rot += dt * 6
@@ -815,7 +855,8 @@ class Blob:
     def jump(self, strength, W, H, a, synced):
         s = min(strength, 2.5)
         m, L, C = self.mood, self.lazy, self.crazy
-        # too lazy to jump for weak beats: just a squishy little bop in place
+        # too lazy (or too mellow) to jump for weak beats: just a squishy little bop in place
+        L = max(L, self.mellow)
         if L > 0 and s < 1.2 + 0.8 * L and random.random() < 0.3 + 0.6 * L:
             self.squash_v += 1.5 + s
             self.squash_ang = -math.pi / 2
@@ -949,6 +990,12 @@ class Blob:
 
         cr.save()
         cr.translate(*self.shake)
+        # mellow: rocks its head side to side
+        tilt = 0.14 * self.mellow * math.sin(self.sway)
+        if abs(tilt) > 1e-3:
+            cr.translate(self.x, self.y)
+            cr.rotate(tilt)
+            cr.translate(-self.x, -self.y)
         pts = self.outline(a, r)
 
         # glow (bigger and brighter while a build-up charges)
@@ -1042,6 +1089,7 @@ class Blob:
 
     def draw_face(self, cr, a, r):
         m, L, C = self.mood, self.lazy, self.crazy
+        M = self.mellow
         sq = self.squash
         face_y = (self.y - r * 0.12 * (1 - sq) + r * 0.08 * L   # lazy face slides down
                   + self.nod * r * 0.14)                       # headbang dip
@@ -1050,13 +1098,35 @@ class Blob:
 
         eyes = ((-0.36, -0.08, self.eye_sizes[0]), (0.34, -0.02, self.eye_sizes[1]))
         # droopy half-closed lids when lazy, wide open when crazy; squint on the headbang
-        lid = max(self.blink, sleepy * 0.9, L * 0.5, yawn_open * 0.85, self.nod * 0.45) * (1 - self.spiral)
+        # mellow: relaxed, content lids (not droopy), fully shut while in bliss
+        bliss = math.sin(math.pi * (1 - self.bliss)) ** 0.3 if self.bliss > 0 else 0.0
+        lid = max(self.blink, sleepy * 0.9, lerp(L * 0.5, 0.3, M), yawn_open * 0.85,
+                  self.nod * 0.45, bliss) * (1 - self.spiral)
+
+        # rosy cheeks
+        if M > 0.02:
+            for cx in (-0.58, 0.56):
+                cr.save()
+                cr.translate(self.x + cx * r, face_y + r * 0.27)
+                cr.scale(1, 0.6)
+                cr.arc(0, 0, r * 0.15, 0, TAU)
+                cr.restore()
+                cr.set_source_rgba(1.0, 0.3, 0.45, 0.6 * M)
+                cr.fill()
+
         for i, ((ex, ey, es), p) in enumerate(zip(eyes, self.pupils)):
             grow = 1 + 0.3 * C * (1 + 0.3 * math.sin(self.t * 20 + i * 2))
             ex_ = self.x + ex * r
             ey_ = face_y + ey * r
             er = r * 0.27 * es * grow
             self.draw_eye(cr, ex_, ey_, er, p, lid, a, idx=i)
+            if bliss > 0.5:
+                # happy closed eyes: ^ ^
+                cr.arc(ex_, ey_ + er * 0.45, er * 0.6, math.pi + 0.5, TAU - 0.5)
+                cr.set_line_cap(cairo.LINE_CAP_ROUND)
+                cr.set_line_width(max(2.5, er * 0.16))
+                cr.set_source_rgba(0.1, 0, 0.1, (bliss - 0.5) * 2)
+                cr.stroke()
             self.draw_brow(cr, ex_, ey_, er, r, side=-1 if i == 0 else 1, idx=i)
 
         # forehead: the third eye gives way to a pentagram when it gets heavy
@@ -1069,24 +1139,30 @@ class Blob:
             self.draw_pentagram(cr, self.x, face_y - r * 0.7, r * 0.2)
 
         # mouth: opens with volume; small & lopsided when lazy, huge grin when crazy
-        mw = r * 0.42 * lerp(0.6, 1.25, m) * (1 - yawn_open * 0.45)
-        mh = r * (0.04 + min(a.level, 1.2) * 0.32) * lerp(0.35, 1.5, m) * (1 - sleepy)
+        # mellow: a wide, gentle, mostly closed smile instead of the lazy "meh"
+        mw = r * 0.42 * lerp(0.6, 1.25, m) * (1 - yawn_open * 0.45) * (1 + 0.3 * M)
+        mh = r * (0.04 + min(a.level, 1.2) * 0.32) * lerp(0.35, 1.5, m) * (1 - sleepy) * (1 - 0.5 * M)
         mh = max(mh, r * 0.55 * yawn_open)
         my = face_y + r * 0.42
-        tilt = r * 0.12 * L                      # one corner droops: "meh"
+        tilt = r * 0.12 * L * (1 - M)            # one corner droops: "meh"
+        smile = r * 0.13 * M                     # corners curl up
+
+        def bend(u):
+            return -smile * (2 * u - 1) ** 2
         steps = 16
         cr.save()
-        cr.move_to(self.x - mw, my - tilt * 0.5)
+        cr.move_to(self.x - mw, my - tilt * 0.5 - smile)
         for i in range(steps + 1):
             u = i / steps
             x = self.x - mw + 2 * mw * u
-            y = (my + (u - 0.5) * tilt + math.sin(u * math.pi) * mh +
+            y = (my + (u - 0.5) * tilt + bend(u) + math.sin(u * math.pi) * mh +
                  math.sin(u * 18 + self.t * 20) * a.high * r * 0.03 * (0.3 + m))
             cr.line_to(x, y)
         for i in range(steps, -1, -1):
             u = i / steps
             x = self.x - mw + 2 * mw * u
-            cr.line_to(x, my + (u - 0.5) * tilt - math.sin(u * math.pi) * mh * (0.25 + yawn_open * 0.6))
+            cr.line_to(x, my + (u - 0.5) * tilt + bend(u)
+                       - math.sin(u * math.pi) * mh * (0.25 + yawn_open * 0.6))
         cr.close_path()
         cr.set_source_rgba(0.15, 0, 0.12, 0.95)
         cr.fill_preserve()
@@ -1158,7 +1234,7 @@ class Blob:
         lift = er * (lerp(-0.1, 0.45, m) + 0.25 * C * math.sin(self.t * 25 + idx * 1.7))
         by = y - er * 1.3 - lift
         w = er * 0.9
-        outer_dy = er * (0.45 * L - 0.5 * C * (1 if idx == 0 else -0.4)
+        outer_dy = er * (0.45 * L * (1 - self.mellow) - 0.5 * C * (1 if idx == 0 else -0.4)
                          - 0.6 * self.heavy)                  # heavy: angry V
         ox, ix = x + side * w, x - side * w
         oy, iy = by + outer_dy, by - outer_dy * 0.3
@@ -1241,6 +1317,40 @@ class Blob:
             cr.set_source_rgba(*hsv(p.hue), f * 0.8)
             cr.arc(p.x, p.y, rad, 0, TAU)
             cr.stroke()
+            return
+        if p.kind == "note":
+            # fade in, then out
+            # (drawn as shapes: cairo's toy text API has no font fallback for the glyph)
+            cr.set_source_rgba(*hsv(p.hue, 0.6, 1), min(1, f * 1.5, (1 - f) * 5))
+            s = p.size
+            cr.save()
+            cr.translate(p.x, p.y)
+            cr.rotate(0.25 * math.sin(p.rot))
+            double = p.hue % 0.2 < 0.1          # ♫ or ♪
+            heads = (0.0, s * 0.9) if double else (0.0,)
+            for hx in heads:
+                cr.save()
+                cr.translate(hx, 0)
+                cr.rotate(-0.4)
+                cr.scale(1, 0.72)
+                cr.arc(0, 0, s * 0.3, 0, TAU)
+                cr.restore()
+                cr.fill()
+                cr.rectangle(hx + s * 0.2, -s * 1.05, s * 0.09, s * 1.05)
+                cr.fill()
+            if double:
+                cr.move_to(s * 0.2, -s * 1.05)
+                cr.line_to(s * 1.19, -s * 1.2)
+                cr.line_to(s * 1.19, -s * 0.98)
+                cr.line_to(s * 0.2, -s * 0.83)
+                cr.close_path()
+            else:
+                cr.move_to(s * 0.29, -s * 1.05)
+                cr.curve_to(s * 0.35, -s * 0.7, s * 0.75, -s * 0.7, s * 0.6, -s * 0.3)
+                cr.curve_to(s * 0.6, -s * 0.6, s * 0.4, -s * 0.7, s * 0.29, -s * 0.75)
+                cr.close_path()
+            cr.fill()
+            cr.restore()
             return
         cr.set_source_rgba(*hsv(p.hue), min(1, f * 1.5))
         s = p.size * (0.5 + f * 0.5)

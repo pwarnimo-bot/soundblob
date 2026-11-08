@@ -36,7 +36,7 @@ import gi
 
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
-from gi.repository import Gtk, Gdk, GLib  # noqa: E402
+from gi.repository import Gtk, Gdk, GLib, Gio  # noqa: E402
 
 try:
     gi.require_version("GtkLayerShell", "0.1")
@@ -466,6 +466,52 @@ class Audio(threading.Thread):
                 + " ".join(f"{k}={v:.2f}" for k, v in self.parts.items()) + "]")
 
 
+# --------------------------------------------------------------------------- now playing
+class NowPlaying:
+    """Asks Spotify (over MPRIS on the session bus) what's playing, every couple of seconds.
+    Easter egg: Mark Lanegan gets the blob into sunglasses and a cigarette."""
+
+    BUS_NAME = "org.mpris.MediaPlayer2.spotify"
+
+    def __init__(self):
+        self.artists = []
+        self.title = ""
+        self.playing = False
+        try:
+            self.bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+        except GLib.Error:
+            self.bus = None
+            return
+        self.poll()
+        GLib.timeout_add_seconds(2, self.poll)
+
+    def poll(self):
+        # asynchronous, so a hung or missing Spotify never stalls the animation
+        for prop, done in (("Metadata", self._on_metadata), ("PlaybackStatus", self._on_status)):
+            self.bus.call(self.BUS_NAME, "/org/mpris/MediaPlayer2", "org.freedesktop.DBus.Properties",
+                          "Get", GLib.Variant("(ss)", ("org.mpris.MediaPlayer2.Player", prop)),
+                          GLib.VariantType("(v)"), Gio.DBusCallFlags.NO_AUTO_START, 1000, None, done)
+        return GLib.SOURCE_CONTINUE
+
+    def _get(self, conn, res):
+        try:
+            return conn.call_finish(res).unpack()[0]
+        except GLib.Error:           # Spotify isn't running
+            return None
+
+    def _on_metadata(self, conn, res):
+        md = self._get(conn, res) or {}
+        self.artists = list(md.get("xesam:artist") or [])
+        self.title = md.get("xesam:title") or ""
+
+    def _on_status(self, conn, res):
+        self.playing = self._get(conn, res) == "Playing"
+
+    @property
+    def lanegan(self):
+        return self.playing and any("lanegan" in a.lower() for a in self.artists)
+
+
 # --------------------------------------------------------------------------- helpers
 def hsv(h, s=1.0, v=1.0):
     return colorsys.hsv_to_rgb(h % 1.0, s, v)
@@ -558,6 +604,9 @@ class Blob:
         self.mellow = 0.0          # smiles, blushes and sways to calm music
         self.sway = 0.0            # sway phase (one side-to-side swing per two beats)
         self.bliss = 0.0           # 1 -> 0 while it closes its eyes, enjoying the song
+        self.cool = 0.0            # easter egg: sunglasses + cigarette (Mark Lanegan on Spotify)
+        self.cool_target = 0.0
+        self.ember = None          # where the cigarette's tip was drawn (smoke rises from there)
 
     @property
     def lazy(self):
@@ -601,6 +650,12 @@ class Blob:
         self.penta_pulse = max(0.0, self.penta_pulse - dt * 4)
         self.nod = max(0.0, self.nod - dt * 7)
         self.flash = max(0.0, self.flash - dt * 3)
+        self.cool += (self.cool_target - self.cool) * min(1, dt * 1.5)
+        if self.cool > 0.5 and self.ember and random.random() < dt * 7:
+            ex, ey = self.ember
+            self.particles.append(Particle(
+                ex, ey, random.uniform(-8, 12), random.uniform(-55, -35),
+                random.uniform(1.6, 2.6), 0.0, random.uniform(2, 4), "smoke"))
         mel = 0.0 if quiet_level(level) else a.mellow
         self.mellow += (mel - self.mellow) * min(1, dt * 1.2)
         M = self.mellow
@@ -787,6 +842,9 @@ class Blob:
             p.life -= dt
             if p.kind == "note":
                 p.vx += math.sin(self.t * 2 + p.rot) * 40 * dt   # lazy wobble, no gravity
+            elif p.kind == "smoke":
+                p.vx += math.sin(self.t * 1.5 + p.rot) * 30 * dt   # curls as it rises
+                p.size += dt * 9
             elif p.kind != "ring":
                 p.vy += 500 * dt
             p.x += p.vx * dt
@@ -1000,9 +1058,10 @@ class Blob:
             cr.arc(tx, ty, tr * (0.35 + f * 0.6), 0, TAU)
             cr.fill()
 
-        # particles behind
+        # particles behind (smoke rises in front of the face, drawn last)
         for p in self.particles:
-            self.draw_particle(cr, p)
+            if p.kind != "smoke":
+                self.draw_particle(cr, p)
 
         cr.save()
         cr.translate(*self.shake)
@@ -1068,6 +1127,9 @@ class Blob:
             self.draw_horns(cr, r)
         self.draw_face(cr, a, r)
         cr.restore()
+        for p in self.particles:
+            if p.kind == "smoke":
+                self.draw_particle(cr, p)
 
     def draw_flash(self, cr):
         """Full-screen colour flash on a drop."""
@@ -1161,6 +1223,7 @@ class Blob:
         mw = r * 0.42 * lerp(0.6, 1.25, m) * (1 - yawn_open * 0.45) * (1 + 0.3 * M)
         mh = r * (0.04 + min(a.level, 1.2) * 0.32) * lerp(0.35, 1.5, m) * (1 - sleepy) * (1 - 0.5 * M)
         mh = max(mh, r * 0.55 * yawn_open)
+        mh *= 1 - 0.75 * self.cool                # too cool to open its mouth much
         my = face_y + r * 0.42
         tilt = r * 0.12 * L * (1 - M)            # one corner droops: "meh"
         smile = r * 0.13 * M                     # corners curl up
@@ -1205,6 +1268,12 @@ class Blob:
                 cr.fill()
         cr.restore()
 
+        if self.cool > 0.01:
+            self.draw_cigarette(cr, self.x + mw * 0.75, my + mh * 0.3, r)
+            self.draw_sunglasses(cr, face_y, r)
+        else:
+            self.ember = None
+
         if sleepy > 0.8:
             cr.select_font_face("Sans", cairo.FONT_SLANT_ITALIC, cairo.FONT_WEIGHT_BOLD)
             for i in range(3):
@@ -1213,6 +1282,89 @@ class Blob:
                 cr.set_source_rgba(*hsv(self.hue + i * 0.2), 1 - ph)
                 cr.move_to(self.x + r * (0.6 + ph * 0.6), self.y - r * (0.7 + ph * 1.1))
                 cr.show_text("z")
+
+    def draw_sunglasses(self, cr, face_y, r):
+        """Easter egg: dark shades that slide down onto the face."""
+        k = self.cool
+        y = face_y - r * 0.05 - (1 - k) ** 2 * r * 1.2      # drops in from above
+        lw, lh = r * 0.34, r * 0.48                         # big enough to hide both googly eyes
+        cr.save()
+        cr.set_line_join(cairo.LINE_JOIN_ROUND)
+        cr.set_line_cap(cairo.LINE_CAP_ROUND)
+        # arms and bridge
+        cr.set_source_rgba(0.06, 0.06, 0.07, k)
+        cr.set_line_width(max(2.5, r * 0.06))
+        cr.move_to(self.x - r * 0.37 - lw, y - lh * 0.5)
+        cr.line_to(self.x - r * 0.92, y - lh * 0.7)
+        cr.move_to(self.x + r * 0.37 + lw, y - lh * 0.5)
+        cr.line_to(self.x + r * 0.92, y - lh * 0.7)
+        cr.move_to(self.x - r * 0.06, y - lh * 0.45)
+        cr.curve_to(self.x - r * 0.02, y - lh * 0.75, self.x + r * 0.02, y - lh * 0.75,
+                    self.x + r * 0.06, y - lh * 0.45)
+        cr.stroke()
+        for side in (-1, 1):
+            cx = self.x + side * r * 0.37
+            # wayfarer-ish lens: flat top, rounded bottom
+            cr.move_to(cx - lw, y - lh * 0.65)
+            cr.line_to(cx + lw, y - lh * 0.65)
+            cr.curve_to(cx + lw, y + lh * 0.5, cx + lw * 0.5, y + lh * 0.75, cx, y + lh * 0.75)
+            cr.curve_to(cx - lw * 0.5, y + lh * 0.75, cx - lw, y + lh * 0.5, cx - lw, y - lh * 0.65)
+            cr.close_path()
+            g = cairo.LinearGradient(cx, y - lh, cx, y + lh)
+            g.add_color_stop_rgba(0, 0.18, 0.18, 0.22, k)
+            g.add_color_stop_rgba(1, 0.02, 0.02, 0.03, k)
+            cr.set_source(g)
+            cr.fill_preserve()
+            cr.set_source_rgba(0.04, 0.04, 0.05, k)
+            cr.set_line_width(max(2, r * 0.05))
+            cr.stroke()
+            # glint
+            cr.move_to(cx - lw * 0.6, y - lh * 0.35)
+            cr.line_to(cx - lw * 0.15, y - lh * 0.35)
+            cr.line_to(cx - lw * 0.45, y + lh * 0.2)
+            cr.close_path()
+            cr.set_source_rgba(1, 1, 1, 0.3 * k)
+            cr.fill()
+        cr.restore()
+
+    def draw_cigarette(self, cr, x, y, r):
+        """Easter egg: a cigarette hanging from the corner of the mouth, ember glowing."""
+        k = self.cool
+        ang = 0.35 + 0.05 * math.sin(self.t * 0.9)         # droops a little, bobs lazily
+        length, w = r * 0.5 * k, r * 0.075
+        dx, dy = math.cos(ang), math.sin(ang)
+        nx, ny = -dy, dx
+        tx, ty = x + dx * length, y + dy * length
+
+        def seg(t0, t1):
+            ax, ay = x + dx * length * t0, y + dy * length * t0
+            bx, by = x + dx * length * t1, y + dy * length * t1
+            cr.move_to(ax + nx * w, ay + ny * w)
+            cr.line_to(bx + nx * w, by + ny * w)
+            cr.line_to(bx - nx * w, by - ny * w)
+            cr.line_to(ax - nx * w, ay - ny * w)
+            cr.close_path()
+
+        cr.save()
+        seg(0, 0.3)                                         # filter
+        cr.set_source_rgba(0.85, 0.55, 0.25, k)
+        cr.fill()
+        seg(0.3, 0.9)                                       # paper
+        cr.set_source_rgba(0.97, 0.96, 0.92, k)
+        cr.fill()
+        seg(0.9, 1.0)                                       # ash
+        cr.set_source_rgba(0.45, 0.43, 0.42, k)
+        cr.fill()
+        # ember: breathes slowly, like someone taking drags
+        drag = 0.5 + 0.5 * math.sin(self.t * 0.8) ** 8
+        cr.arc(tx, ty, w * (1.6 + 0.8 * drag), 0, TAU)
+        cr.set_source_rgba(1.0, 0.35, 0.05, 0.35 * drag * k)
+        cr.fill()
+        cr.arc(tx, ty, w * 0.75, 0, TAU)
+        cr.set_source_rgba(1.0, 0.3 + 0.4 * drag, 0.05, k)
+        cr.fill()
+        cr.restore()
+        self.ember = (tx + self.shake[0], ty + self.shake[1])
 
     def draw_blood_tear(self, cr, x, y, er, r, idx):
         """A streak of blood running down from under the eye, a drop swelling at its end."""
@@ -1414,6 +1566,11 @@ class Blob:
             cr.restore()
             cr.fill()
             return
+        if p.kind == "smoke":
+            cr.set_source_rgba(0.82, 0.82, 0.85, 0.35 * f * min(1, (1 - f) * 6))
+            cr.arc(p.x, p.y, p.size, 0, TAU)
+            cr.fill()
+            return
         if p.kind == "note":
             # fade in, then out
             # (drawn as shapes: cairo's toy text API has no font fallback for the glyph)
@@ -1493,6 +1650,7 @@ class Overlay(Gtk.Window):
         super().__init__(title="soundblob")
         self.audio = audio
         self.blob = Blob(args.size, confetti=args.confetti)
+        self.now_playing = NowPlaying()
         self.last_time = None
         # FPS counter: frames actually drawn, averaged over half-second windows
         self.show_fps = not args.no_fps
@@ -1546,6 +1704,7 @@ class Overlay(Gtk.Window):
             # 2 substeps for stable bounces
             for _ in range(2):
                 self.blob.update(dt / 2, W, H, self.audio)
+        self.blob.cool_target = 1.0 if self.now_playing.lanegan else 0.0
         self.queue_draw()
         return GLib.SOURCE_CONTINUE
 

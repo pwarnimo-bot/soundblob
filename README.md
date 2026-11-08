@@ -15,7 +15,8 @@ wlroots compositors.
   - **Rock/metal:** headbangs on the snare, grows devil horns when guitars are distorted,
     rumbles on double bass. When it gets really heavy, the body turns dark, the brows go
     red and angry, an inverted pentagram glows on its forehead, flaring with the drums,
-    and darkness creeps in from the screen edges.
+    the eyes go dark and bloodshot with glowing red pupils and weep blood that drips
+    off the blob, and darkness creeps in from the screen edges.
   - **Techno/psytrance:** jumps that land on the kick, hovers during breakdowns, spiral eyes
     in build-ups, and explodes on the drop.
   - **Mellow (acoustic, ballads, quiet grunge):** calm music with clean guitars makes it

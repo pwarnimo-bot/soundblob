@@ -545,6 +545,9 @@ class Blob:
         self.horns = 0.0           # grow with distorted guitars (metal)
         self.heavy = 0.0           # really heavy riffs: body goes dark, pentagram on the forehead
         self.penta_pulse = 0.0     # pentagram flares on kicks and snares
+        # bloodshot veins per eye: (angle, length, kink) — fixed so they don't flicker
+        self.veins = [[(random.uniform(0, TAU), random.uniform(0.35, 0.6), random.uniform(-0.5, 0.5))
+                       for _ in range(7)] for _ in range(2)]
         self.rumble = 0.0          # double-bass / blast-beat vibration
         self.hover = 0.0           # floats during breakdowns (techno/psy)
         self.spiral = 0.0          # hypnotic eyes during build-ups (psy)
@@ -559,6 +562,11 @@ class Blob:
     @property
     def lazy(self):
         return clamp01((0.38 - self.mood) / 0.3)
+
+    @property
+    def evil(self):
+        """How visible the pentagram is: also drives the dark, bloody eyes."""
+        return clamp01((self.heavy - 0.15) / 0.45)
 
     @property
     def crazy(self):
@@ -759,6 +767,14 @@ class Blob:
                 self.x + math.cos(ang) * r, self.y + math.sin(ang) * r,
                 math.cos(ang) * 120, math.sin(ang) * 120 - 60,
                 random.uniform(0.4, 0.9), self.hue + random.uniform(0.3, 0.7), random.uniform(2, 5), "spark"))
+
+        # heavy: blood drips from the eyes and falls off the chin
+        if self.evil > 0.3 and random.random() < dt * 2.5 * self.evil:
+            side = random.choice((-0.36, 0.34))
+            self.particles.append(Particle(
+                self.x + side * r + random.uniform(-0.05, 0.05) * r, self.y + r * 0.85,
+                self.vx * 0.3, random.uniform(0, 60), random.uniform(0.6, 1.0), 0.0,
+                random.uniform(2.5, 4.5), "blood"))
 
         # mellow: little music notes drift up from the blob
         if M > 0.3 and level > 0.1 and random.random() < dt * 2.0 * M:
@@ -1120,6 +1136,8 @@ class Blob:
             ey_ = face_y + ey * r
             er = r * 0.27 * es * grow
             self.draw_eye(cr, ex_, ey_, er, p, lid, a, idx=i)
+            if self.evil > 0.05:
+                self.draw_blood_tear(cr, ex_, ey_, er, r, i)
             if bliss > 0.5:
                 # happy closed eyes: ^ ^
                 cr.arc(ex_, ey_ + er * 0.45, er * 0.6, math.pi + 0.5, TAU - 0.5)
@@ -1196,6 +1214,34 @@ class Blob:
                 cr.move_to(self.x + r * (0.6 + ph * 0.6), self.y - r * (0.7 + ph * 1.1))
                 cr.show_text("z")
 
+    def draw_blood_tear(self, cr, x, y, er, r, idx):
+        """A streak of blood running down from under the eye, a drop swelling at its end."""
+        ev = self.evil
+        # each eye's streak slowly grows and shrinks, out of step with the other
+        grow = 0.75 + 0.25 * math.sin(self.t * 0.8 + idx * 2.1)
+        length = r * 0.55 * ev * grow
+        x0 = x + er * (0.15 if idx == 0 else -0.2)
+        y0 = y + er * 0.8
+        w = er * 0.16
+        sway = math.sin(self.t * 1.3 + idx) * w * 0.6
+        cr.move_to(x0 - w, y0)
+        cr.curve_to(x0 - w * 0.6, y0 + length * 0.4, x0 - w * 0.5 + sway, y0 + length * 0.7,
+                    x0 - w * 0.45 + sway, y0 + length)
+        cr.arc_negative(x0 + sway, y0 + length, w * 0.45, math.pi, 0)
+        cr.curve_to(x0 + w * 0.5 + sway, y0 + length * 0.7, x0 + w * 0.6, y0 + length * 0.4,
+                    x0 + w, y0)
+        cr.close_path()
+        cr.set_source_rgba(0.85, 0.02, 0.05, 0.95 * ev)   # bright enough to read on the dark body
+        cr.fill()
+        # swelling drop at the tip
+        drop = w * (0.7 + 0.5 * grow + 0.3 * self.penta_pulse)
+        cr.arc(x0 + sway, y0 + length + drop * 0.4, drop, 0, TAU)
+        cr.fill()
+        # wet highlight
+        cr.set_source_rgba(1, 0.5, 0.5, 0.35 * ev)
+        cr.arc(x0 + sway - drop * 0.35, y0 + length + drop * 0.1, drop * 0.25, 0, TAU)
+        cr.fill()
+
     def draw_pentagram(self, cr, x, y, size):
         """Inverted pentagram in a circle, glowing red; flares on kicks and snares."""
         vis = clamp01((self.heavy - 0.15) / 0.45)
@@ -1248,12 +1294,39 @@ class Blob:
 
     def draw_eye(self, cr, x, y, er, p, lid, a, hue_eye=False, idx=0):
         C, L = self.crazy, self.lazy
+        ev = 0.0 if hue_eye else self.evil      # heavy: dark, bloodshot eyes
         cr.arc(x, y, er, 0, TAU)
-        cr.set_source_rgba(1, 1, 1, 1)
+        if ev > 0:
+            # whites sink to a dark blood-red, deepest at the rim
+            g = cairo.RadialGradient(x, y, er * 0.1, x, y, er)
+            g.add_color_stop_rgb(0, *(lerp(1, c, ev) for c in (0.3, 0.02, 0.03)))
+            g.add_color_stop_rgb(1, *(lerp(1, c, ev) for c in (0.1, 0.0, 0.01)))
+            cr.set_source(g)
+        else:
+            cr.set_source_rgba(1, 1, 1, 1)
         cr.fill_preserve()
         cr.set_line_width(max(2, er * 0.12))
         cr.set_source_rgba(0.1, 0, 0.1, 1)
         cr.stroke()
+        if ev > 0.05:
+            # bloodshot veins creeping in from the rim, throbbing with the drums
+            cr.save()
+            cr.set_line_cap(cairo.LINE_CAP_ROUND)
+            cr.set_line_width(max(1.0, er * 0.06))
+            cr.set_source_rgba(0.95, 0.08 + 0.2 * self.penta_pulse, 0.05, ev * (0.75 + 0.25 * self.penta_pulse))
+            for ang, ln, kink in self.veins[idx % 2]:
+                ln *= ev
+                c, s_ = math.cos(ang), math.sin(ang)
+                n_, m_ = math.cos(ang + kink), math.sin(ang + kink)
+                cr.move_to(x + c * er * 0.97, y + s_ * er * 0.97)
+                mx, my = x + c * er * (0.97 - ln * 0.5), y + s_ * er * (0.97 - ln * 0.5)
+                cr.line_to(mx, my)
+                cr.line_to(mx - n_ * er * ln * 0.5, my - m_ * er * ln * 0.5)
+                cr.move_to(mx, my)            # little fork
+                cr.line_to(mx - math.cos(ang - kink) * er * ln * 0.3,
+                           my - math.sin(ang - kink) * er * ln * 0.3)
+            cr.stroke()
+            cr.restore()
         # pupils dilate with bass; tiny manic pinpricks when crazy, big & dopey when lazy
         pr = er * (0.42 + min(a.bass, 1.5) * 0.15) * lerp(1.0, 0.6, C) * (1 + 0.12 * L)
         # crazy: pupils spin in circles, in opposite directions
@@ -1264,8 +1337,16 @@ class Blob:
         py = y + oy * (er - pr) * 0.95
         sp = self.spiral
         if sp < 0.98:
+            if ev > 0.05:
+                # glowing hot red pupils in the dark
+                cr.arc(px, py, pr * 1.6, 0, TAU)
+                cr.set_source_rgba(1.0, 0.1, 0.0, 0.3 * ev * (1 + self.penta_pulse) * (1 - sp))
+                cr.fill()
             if hue_eye:
                 cr.set_source_rgba(*hsv(self.hue + 0.5), 1 - sp)
+            elif ev > 0.05:
+                cr.set_source_rgba(lerp(0.55 * self.horns, 1.0, ev), 0.05 + 0.3 * self.penta_pulse * ev,
+                                   0.02, 1 - sp)
             elif self.horns > 0.3:
                 # metal: glowing red pupils
                 cr.set_source_rgba(0.55 * self.horns, 0.0, 0.08 * (1 - self.horns), 1 - sp)
@@ -1273,7 +1354,7 @@ class Blob:
                 cr.set_source_rgba(0.05, 0.0, 0.08, 1 - sp)
             cr.arc(px, py, pr, 0, TAU)
             cr.fill()
-            cr.set_source_rgba(1, 1, 1, 0.9 * (1 - sp))
+            cr.set_source_rgba(1, 1, 1, 0.9 * (1 - sp) * (1 - 0.6 * ev))
             cr.arc(px - pr * 0.35, py - pr * 0.35, pr * 0.28, 0, TAU)
             cr.fill()
         if sp > 0.02:
@@ -1317,6 +1398,21 @@ class Blob:
             cr.set_source_rgba(*hsv(p.hue), f * 0.8)
             cr.arc(p.x, p.y, rad, 0, TAU)
             cr.stroke()
+            return
+        if p.kind == "blood":
+            cr.set_source_rgba(0.8, 0.02, 0.05, min(1, f * 2))
+            s = p.size
+            # teardrop stretched by its fall speed
+            stretch = 1 + min(p.vy / 600, 1.5)
+            cr.save()
+            cr.translate(p.x, p.y)
+            cr.scale(1, stretch)
+            cr.move_to(0, -s * 1.8)
+            cr.curve_to(s * 0.4, -s * 0.8, s, -s * 0.4, s, 0)
+            cr.arc(0, 0, s, 0, math.pi)
+            cr.curve_to(-s, -s * 0.4, -s * 0.4, -s * 0.8, 0, -s * 1.8)
+            cr.restore()
+            cr.fill()
             return
         if p.kind == "note":
             # fade in, then out

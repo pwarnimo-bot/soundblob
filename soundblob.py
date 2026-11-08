@@ -467,6 +467,46 @@ class Audio(threading.Thread):
 
 
 # --------------------------------------------------------------------------- now playing
+# Mark Lanegan easter egg. Any track with "lanegan" among Spotify's artists (his solo work,
+# Mark Lanegan Band, duets and credited features) or in the title ("feat. Mark Lanegan")
+# counts. These cover the songs he sings on without being listed as an artist.
+# Names are compared lowercase, without punctuation or " - Remastered"/"(Live)" suffixes.
+LANEGAN_BANDS = {"screaming trees", "the gutter twins"}     # every song: he was the singer
+LANEGAN_ALBUMS = {                                           # (artist, album): all of it
+    ("soulsavers", "its not how far you fall its the way you land"),
+    ("soulsavers", "broken"),
+}
+LANEGAN_SONGS = {                                            # (artist, title)
+    ("queens of the stone age", "in the fade"),
+    ("queens of the stone age", "hangin tree"),
+    ("queens of the stone age", "a song for the dead"),
+    ("queens of the stone age", "god is in the radio"),
+    ("queens of the stone age", "this lullaby"),
+    ("queens of the stone age", "burn the witch"),
+    ("mad season", "long gone day"),
+    ("mad season", "im above"),
+    ("mad season", "locomotive"),
+    ("mad season", "black book of fear"),
+    ("mad season", "slip away"),
+}
+
+
+def _norm(name):
+    """'Hangin' Tree - 2002 Remaster' -> 'hangin tree'"""
+    name = name.lower().split(" - ")[0].split(" (")[0].split(" [")[0]
+    return " ".join("".join(c for c in name if c.isalnum() or c.isspace()).split())
+
+
+def lanegan_on(artists, title, album=""):
+    """Is Mark Lanegan singing on this track?"""
+    if any("lanegan" in a.lower() for a in artists) or "lanegan" in title.lower():
+        return True
+    names = {_norm(a) for a in artists}
+    t, al = _norm(title), _norm(album)
+    return bool(names & LANEGAN_BANDS or any((n, al) in LANEGAN_ALBUMS or (n, t) in LANEGAN_SONGS
+                                              for n in names))
+
+
 class NowPlaying:
     """Asks Spotify (over MPRIS on the session bus) what's playing, every couple of seconds.
     Easter egg: Mark Lanegan gets the blob into sunglasses and a cigarette."""
@@ -476,6 +516,7 @@ class NowPlaying:
     def __init__(self):
         self.artists = []
         self.title = ""
+        self.album = ""
         self.playing = False
         try:
             self.bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
@@ -503,13 +544,14 @@ class NowPlaying:
         md = self._get(conn, res) or {}
         self.artists = list(md.get("xesam:artist") or [])
         self.title = md.get("xesam:title") or ""
+        self.album = md.get("xesam:album") or ""
 
     def _on_status(self, conn, res):
         self.playing = self._get(conn, res) == "Playing"
 
     @property
     def lanegan(self):
-        return self.playing and any("lanegan" in a.lower() for a in self.artists)
+        return self.playing and lanegan_on(self.artists, self.title, self.album)
 
 
 # --------------------------------------------------------------------------- helpers

@@ -1192,11 +1192,13 @@ class Blob:
             tx = bx + side * length * 0.55
             ty = by - length
             w = r * 0.2 * (0.4 + 0.6 * h)
-            cr.move_to(bx - w, by + w * 0.3)
-            cr.curve_to(bx - w + side * length * 0.1, by - length * 0.5,
+            # inner/outer base corners mirror with the side, so both horns are symmetric
+            inner, outer = bx - side * w, bx + side * w
+            cr.move_to(inner, by + w * 0.3)
+            cr.curve_to(inner + side * length * 0.1, by - length * 0.5,
                         tx - side * length * 0.25, ty + length * 0.15, tx, ty)
             cr.curve_to(tx - side * length * 0.05, ty + length * 0.35,
-                        bx + w + side * length * 0.25, by - length * 0.4, bx + w, by + w * 0.3)
+                        outer + side * length * 0.25, by - length * 0.4, outer, by + w * 0.3)
             cr.close_path()
             grad = cairo.LinearGradient(bx, by, tx, ty)
             grad.add_color_stop_rgba(0, 0.55, 0.02, 0.05, 1)

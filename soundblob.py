@@ -576,6 +576,30 @@ GARCIA_BANDS = {"kyuss", "sons of kyuss", "kyuss lives", "unida", "slo burn", "h
                 "vista chino", "john garcia", "john garcia and the band of gold"}
 
 
+def tool_on(artists, title, album=""):
+    """Is this Tool?"""
+    return _plays_on(artists, title, album, {"tool"})
+
+
+def korn_on(artists, title, album=""):
+    """Is this Korn (or Jonathan Davis solo)?"""
+    return _plays_on(artists, title, album, {"korn", "jonathan davis", "jdevil"})
+
+
+def nin_on(artists, title, album=""):
+    """Is Trent Reznor on this track (Nine Inch Nails and friends)?"""
+    return _plays_on(artists, title, album, {
+        "nine inch nails", "trent reznor", "trent reznor and atticus ross",
+        "how to destroy angels"})
+
+
+def linkin_on(artists, title, album=""):
+    """Is this Linkin Park (or Chester's and Mike's other bands)?"""
+    return _plays_on(artists, title, album, {
+        "linkin park", "chester bennington", "dead by sunrise", "grey daze", "mike shinoda",
+        "fort minor"})
+
+
 def garcia_on(artists, title, album=""):
     """Is John Garcia singing on this track?"""
     if any("john garcia" in a.lower() for a in artists):
@@ -588,7 +612,9 @@ class NowPlaying:
     Easter eggs: Mark Lanegan gets the blob into sunglasses and a cigarette, Layne Staley into
     chains and red round glasses, Richard Wright turns it into a prism, and Kurt Cobain gets
     white shades that come off for X eyes when the chorus kicks in, and John Garcia sends it
-    tripping through the desert."""
+    tripping through the desert. Tool opens its third eye inside a spinning fractal mandala, Korn
+    gives it dreadlocks and a spiked collar on a leash, Nine Inch Nails glitches it, and Linkin
+    Park puts on headphones, sprays graffiti paint and screams the choruses."""
 
     BUS_NAME = "org.mpris.MediaPlayer2.spotify"
 
@@ -643,6 +669,22 @@ class NowPlaying:
     @property
     def kurt(self):
         return self.playing and kurt_on(self.artists, self.title, self.album)
+
+    @property
+    def tool(self):
+        return self.playing and tool_on(self.artists, self.title, self.album)
+
+    @property
+    def korn(self):
+        return self.playing and korn_on(self.artists, self.title, self.album)
+
+    @property
+    def nin(self):
+        return self.playing and nin_on(self.artists, self.title, self.album)
+
+    @property
+    def linkin(self):
+        return self.playing and linkin_on(self.artists, self.title, self.album)
 
     @property
     def garcia(self):
@@ -753,6 +795,20 @@ class Blob:
         self.grunge = 0.0          # loud-chorus level while Kurt is on (shades up, X eyes)
         self.desert = 0.0          # easter egg: psychedelic desert trip (John Garcia / Kyuss)
         self.desert_target = 0.0
+        self.tool = 0.0            # easter egg: third eye, fractal mandala, golden spiral (Tool)
+        self.tool_target = 0.0
+        self.mandala = None        # offscreen images of the mandala (see draw_mandala)
+        self.korn = 0.0            # easter egg: dreadlocks, spiked collar on a leash, big bounces
+        self.korn_target = 0.0
+        self.dread_sw = 0.0        # dreadlock swing (spring), sideways
+        self.dread_v = 0.0
+        self.leash_x = 300.0       # where the leash disappears off the top of the screen
+        self.nin = 0.0             # easter egg: steel-grey, scanlines, colour fringes, glitches (NIN)
+        self.nin_target = 0.0
+        self.glitch = 0.0          # 1 -> 0 during a glitch burst (on kicks and snares)
+        self.linkin = 0.0          # easter egg: headphones, graffiti splats, screams (Linkin Park)
+        self.linkin_target = 0.0
+        self.scream = 0.0          # loud chorus while Linkin Park is on
 
     @property
     def lazy(self):
@@ -801,6 +857,18 @@ class Blob:
         self.wright += (self.wright_target - self.wright) * min(1, dt * 1.5)
         self.kurt += (self.kurt_target - self.kurt) * min(1, dt * 1.5)
         self.desert += (self.desert_target - self.desert) * min(1, dt * 0.8)
+        self.tool += (self.tool_target - self.tool) * min(1, dt * 0.8)
+        self.korn += (self.korn_target - self.korn) * min(1, dt * 1.5)
+        self.nin += (self.nin_target - self.nin) * min(1, dt * 1.5)
+        self.glitch = max(0.0, self.glitch - dt * 5)
+        self.linkin += (self.linkin_target - self.linkin) * min(1, dt * 1.5)
+        self.scream = self.linkin * clamp01((self.grunge - 0.45) / 0.4)
+        if self.korn > 0.01:
+            # dreads whip against the motion and fly up when falling; the leash trails behind
+            want = max(-1.0, min(1.0, -self.vx / 700)) + self.nod * self.nod_side * 0.6
+            self.dread_v += ((want - self.dread_sw) * 60 - self.dread_v * 6) * dt
+            self.dread_sw += self.dread_v * dt
+            self.leash_x += (self.x - self.leash_x) * min(1, dt * 1.2)
         # desert: sand blowing across the screen on the hot wind
         if self.desert > 0.2 and random.random() < dt * 25 * self.desert:
             self.emit(Particle(
@@ -971,6 +1039,10 @@ class Blob:
             # desert: the body's colour is drawn into sunset reds, oranges and sand
             want = 0.06 + 0.07 * math.sin(self.t * 0.6)
             self.hue += (((want - self.hue) + 0.5) % 1.0 - 0.5) * self.desert * min(1, dt * 3)
+        if self.tool > 0.01:
+            # Tool: deep indigo and violet, the colours of the visionary art
+            want = 0.72 + 0.06 * math.sin(self.t * 0.4)
+            self.hue += (((want - self.hue) + 0.5) % 1.0 - 0.5) * self.tool * min(1, dt * 3)
 
         # trail: short when lazy, long rainbow smear when crazy
         self.trail.append((self.x, self.y, r, self.hue))
@@ -1004,6 +1076,10 @@ class Blob:
             p.life -= dt
             if p.kind == "note":
                 p.vx += math.sin(self.t * 2 + p.rot) * 40 * dt   # lazy wobble, no gravity
+            elif p.kind == "paint":
+                # flies off, slows to a stop on the "wall", then just drips
+                p.vx *= max(0.0, 1 - 7 * dt)
+                p.vy *= max(0.0, 1 - 7 * dt)
             elif p.kind == "sand":
                 p.vy += math.sin(self.t * 3 + p.rot) * 60 * dt    # tumbles on the wind
             elif p.kind == "smoke":
@@ -1018,7 +1094,7 @@ class Blob:
 
     def dark(self, rgb, k=0.85):
         """Fade a colour toward DARK as the music gets heavy."""
-        t = self.heavy * k
+        t = max(self.heavy, 0.5 * self.nin) * k      # NIN: dull, industrial steel
         return tuple(c + (d - c) * t for c, d in zip(rgb, DARK))
 
     def emit(self, p):
@@ -1032,6 +1108,17 @@ class Blob:
 
     def on_kick(self, strength, W, H, a):
         self.penta_pulse = max(self.penta_pulse, 0.6)
+        if self.nin > 0.3 and random.random() < 0.3:
+            self.glitch = 1.0
+        if self.linkin > 0.3:
+            # graffiti: paint splats fly off and stick, dripping
+            for _ in range(2):
+                ang = random.uniform(0, TAU)
+                sp = random.uniform(500, 900)
+                self.emit(Particle(
+                    self.x + math.cos(ang) * self.R, self.y + math.sin(ang) * self.R,
+                    math.cos(ang) * sp, math.sin(ang) * sp, random.uniform(2.5, 3.5),
+                    random.choice((0.0, 0.0, 0.58, 0.14)), random.uniform(6, 12), "paint"))
         if self.hover > 0.5:
             # floating in a breakdown: kicks just make it pulse
             self.squash_v += 1.5
@@ -1042,6 +1129,8 @@ class Blob:
         """Headbang! Body nods down, face dips, little sideways shove."""
         s = min(strength, 3.0)
         self.penta_pulse = 1.0
+        if self.nin > 0.3 and random.random() < 0.5:
+            self.glitch = 1.0
         self.nod = min(1.0, 0.5 + 0.25 * s)
         self.squash_v += 1.5 + s * (0.5 + self.horns)
         self.squash_ang = -math.pi / 2
@@ -1113,6 +1202,7 @@ class Blob:
             return
         # jump height scales with the screen and the mood
         height = H * (0.18 + 0.22 * s / 2.5) * random.uniform(0.8, 1.15) * lerp(0.45, 1.4, m)
+        height *= 1 + 0.4 * self.korn        # Korn: jump!
         P = a.beat_period if synced else 0.0
         floor_y = H - r
         vy = None
@@ -1214,6 +1304,9 @@ class Blob:
         r = self.radius(a.bass)
         sat = lerp(0.6, 1.0, clamp01(self.mood * 2))
         sat *= 1 - 0.55 * self.layne      # Layne: washed-out, grungy colours
+        sat *= 1 - 0.85 * self.nin        # NIN: nearly black and white
+        if self.tool > 0.01:
+            self.draw_mandala(cr, a, self.R)   # base size: the bass pulse is built in
 
         # psychedelic ghost trail
         n = len(self.trail)
@@ -1228,6 +1321,18 @@ class Blob:
             if p.kind != "smoke":
                 self.draw_particle(cr, p)
 
+        if self.nin > 0.3 and self.glitch > 0.05:
+            self.draw_glitched(cr, a, r, sat)
+        else:
+            self.draw_body(cr, a, r, sat)
+        if self.korn > 0.01:
+            self.draw_leash(cr, r)
+        for p in self.particles:
+            if p.kind == "smoke":
+                self.draw_particle(cr, p)
+
+    def draw_body(self, cr, a, r, sat):
+        """The blob itself: glow, body, outline, shine, horns and the rest, and its face."""
         cr.save()
         cr.translate(*self.shake)
         # mellow: rocks its head side to side
@@ -1253,13 +1358,15 @@ class Blob:
             cr.scale(k, k)
             cr.translate(-self.x, -self.y)
             smooth_closed_path(cr, pts)
-            glow = hsv(self.hue + 0.5 * (1 - self.desert), sat)   # desert: warm glow
+            glow = hsv(self.hue + 0.5 * (1 - max(self.desert, self.tool)), sat)  # desert/Tool: on-palette
             glow = tuple(lerp(c, d, self.heavy) for c, d in zip(glow, (0.75, 0.0, 0.05)))
             cr.set_source_rgba(*glow, al + a.level * 0.08 + self.crazy * 0.08)
             cr.fill()
             cr.restore()
 
         # body
+        if self.nin > 0.01:
+            self.draw_rgb_split(cr, pts, r)
         smooth_closed_path(cr, pts)
         grad = cairo.RadialGradient(self.x - r * 0.35, self.y - r * 0.4, r * 0.05,
                                     self.x, self.y, r * 1.35)
@@ -1277,10 +1384,12 @@ class Blob:
             ang = self.spin * (1 if j % 2 else -0.7) + j * TAU / 6 + math.sin(at + j) * 0.5
             dist = r * (0.35 + 0.25 * math.sin(at * 1.3 + j * 2))
             sr = r * (0.18 + 0.12 * a.spectrum[(j * 5) % 32])
-            spot = (0.25 + j * 0.13) * (1 - 0.8 * self.desert)    # desert: keep to sunset hues
+            spot = (0.25 + j * 0.13) * (1 - 0.8 * max(self.desert, self.tool))  # keep to the egg's hues
             cr.set_source_rgba(*self.dark(hsv(self.hue + spot, 0.9 * sat, 1), 0.9), 0.55)
             cr.arc(self.x + math.cos(ang) * dist, self.y + math.sin(ang) * dist, sr, 0, TAU)
             cr.fill()
+        if self.nin > 0.01:
+            self.draw_scanlines(cr, r)
         cr.restore()
 
         cr.set_line_width(4 + a.high * 4)
@@ -1301,11 +1410,236 @@ class Blob:
             self.draw_horns(cr, r)
         if self.layne > 0.01:
             self.draw_chain(cr, r)
+        if self.korn > 0.01:
+            self.draw_collar(cr, r)
         self.draw_face(cr, a, r)
+        if self.korn > 0.01:
+            self.draw_dreads(cr, r)
         cr.restore()
-        for p in self.particles:
-            if p.kind == "smoke":
-                self.draw_particle(cr, p)
+
+    def draw_glitched(self, cr, a, r, sat):
+        """Easter egg (Nine Inch Nails): the blob tears into horizontal slices that jump
+        sideways, with static around it. Drawn into a group clipped to the blob's
+        surroundings, so the offscreen buffer stays small."""
+        x0, y0 = self.x - r * 3.9, self.y - r * 2.1
+        w, h = r * 7.8, r * 3.8
+        g = self.glitch
+        cr.save()
+        cr.rectangle(x0, y0, w, h)
+        cr.clip()
+        cr.push_group()
+        self.draw_body(cr, a, r, sat)
+        pat = cr.pop_group()
+        slices = []
+        for _ in range(random.randint(2, 5)):
+            sy = self.y + random.uniform(-1.0, 0.9) * r
+            sh = r * random.uniform(0.04, 0.22)
+            slices.append((sy, sh, random.choice((-1, 1)) * r * random.uniform(0.08, 0.4) * g))
+        # everything outside the slices stays put...
+        cr.save()
+        cr.set_fill_rule(cairo.FILL_RULE_EVEN_ODD)
+        cr.rectangle(x0, y0, w, h)
+        for sy, sh, _ in slices:
+            cr.rectangle(x0, sy, w, sh)
+        cr.clip()
+        cr.set_source(pat)
+        cr.paint()
+        cr.restore()
+        # ...and the slices are shifted sideways
+        for sy, sh, dx in slices:
+            cr.save()
+            cr.rectangle(x0, sy, w, sh)
+            cr.clip()
+            cr.translate(dx, 0)
+            cr.set_source(pat)
+            cr.paint()
+            cr.restore()
+        # static
+        for _ in range(int(40 * g)):
+            v = random.random()
+            cr.rectangle(self.x + random.uniform(-1.6, 1.6) * r, self.y + random.uniform(-1.3, 1.3) * r,
+                         random.uniform(2, 9), random.uniform(1, 3))
+            cr.set_source_rgba(v, v, v, 0.8 * g)
+            cr.fill()
+        cr.restore()
+
+    def draw_rgb_split(self, cr, pts, r):
+        """Easter egg (Nine Inch Nails): red and cyan ghosts of the body, like a misaligned
+        CRT; they jump apart during a glitch."""
+        off = r * (0.035 + 0.15 * self.glitch) * self.nin
+        for dx, rgb in ((off, (1.0, 0.1, 0.15)), (-off, (0.1, 0.9, 1.0))):
+            cr.save()
+            cr.translate(dx, -dx * 0.15)
+            smooth_closed_path(cr, pts)
+            cr.set_source_rgba(*rgb, 0.55 * self.nin)
+            cr.fill()
+            cr.restore()
+
+    def draw_scanlines(self, cr, r):
+        """Easter egg (Nine Inch Nails): CRT scanlines across the body (already clipped to it)
+        and a brighter band rolling down through it."""
+        k = self.nin
+        top, bot = self.y - r * 1.4, self.y + r * 1.4
+        step = max(3.0, r * 0.045)
+        y = top
+        while y < bot:
+            cr.move_to(self.x - r * 1.5, y)
+            cr.line_to(self.x + r * 1.5, y)
+            y += step
+        cr.set_source_rgba(0, 0, 0, 0.3 * k)
+        cr.set_line_width(step * 0.4)
+        cr.stroke()
+        band = top + (self.t * 0.35 % 1.0) * (bot - top)
+        cr.rectangle(self.x - r * 1.5, band, r * 3, r * 0.18)
+        cr.set_source_rgba(1, 1, 1, 0.08 * k)
+        cr.fill()
+
+    def draw_dreads(self, cr, r):
+        """Easter egg (Korn): dreadlocks hanging around the face, whipping with every move."""
+        k = self.korn
+        sw = self.dread_sw
+        lift = max(-0.4, min(0.6, self.vy / 1500))      # fly up while falling, drag while rising
+        cr.save()
+        cr.set_line_cap(cairo.LINE_CAP_ROUND)
+        ends = []
+        for side in (-1, 1):
+            for j in range(4):
+                ang = -math.pi / 2 + side * (0.8 + j * 0.22)     # clear of the eyes
+                bx = self.x + math.cos(ang) * r * 0.86
+                by = self.y + math.sin(ang) * r * 0.86 + self.nod * r * 0.1
+                ln = r * (1.0 + 0.12 * j) * k
+                # hang down past the side of the face, swinging with the motion
+                ex = bx + side * r * (0.12 + 0.05 * j) + sw * r * 0.45
+                ey = by + ln * (1 - 0.6 * lift)
+                cx1 = bx + side * r * 0.25 + sw * r * 0.1
+                cy1 = by + ln * 0.2
+                cx2 = ex - sw * r * 0.2
+                cy2 = ey - ln * 0.35
+                cr.move_to(bx, by)
+                cr.curve_to(cx1, cy1, cx2, cy2, ex, ey)
+                ends.append((ex, ey))
+        path = cr.copy_path()
+        cr.set_source_rgba(0.1, 0.06, 0.04, k)
+        cr.set_line_width(max(4, r * 0.11))
+        cr.stroke()
+        cr.translate(-r * 0.015, -r * 0.01)            # highlight (dashes would be slow)
+        cr.append_path(path)
+        cr.set_source_rgba(0.4, 0.26, 0.15, k)
+        cr.set_line_width(max(1.5, r * 0.035))
+        cr.stroke()
+        cr.translate(r * 0.015, r * 0.01)
+        for i, (ex, ey) in enumerate(ends):              # beads at the tips
+            cr.arc(ex, ey, max(2.5, r * 0.055), 0, TAU)
+            cr.set_source_rgba(*((0.85, 0.65, 0.2) if i % 3 else (0.7, 0.15, 0.15)), k)
+            cr.fill()
+        cr.restore()
+
+    def draw_collar(self, cr, r):
+        """Easter egg (Korn): a black spiked collar low on the body, with a ring for the leash."""
+        k = self.korn
+        cr.save()
+        a0, a1 = math.pi * 0.18, math.pi * 0.82
+        rr = r * 0.78
+        cr.arc(self.x, self.y - r * 0.05, rr, a0, a1)
+        cr.set_source_rgba(0.06, 0.06, 0.07, k)
+        cr.set_line_width(r * 0.13)
+        cr.stroke()
+        # silver spikes pointing outward
+        for j in range(7):
+            ang = lerp(a0 + 0.12, a1 - 0.12, j / 6)
+            c, s_ = math.cos(ang), math.sin(ang)
+            bx, by = self.x + c * rr, self.y - r * 0.05 + s_ * rr
+            nx, ny = -s_, c
+            cr.move_to(bx + nx * r * 0.04, by + ny * r * 0.04)
+            cr.line_to(bx + c * r * 0.14, by + s_ * r * 0.14)
+            cr.line_to(bx - nx * r * 0.04, by - ny * r * 0.04)
+            cr.close_path()
+        cr.set_source_rgba(0.85, 0.86, 0.9, k)
+        cr.fill()
+        # leash ring on the right
+        rx, ry = self.leash_ring(r)
+        cr.arc(rx, ry, r * 0.07, 0, TAU)
+        cr.set_source_rgba(0.8, 0.8, 0.85, k)
+        cr.set_line_width(max(2, r * 0.03))
+        cr.stroke()
+        cr.restore()
+
+    def leash_ring(self, r):
+        ang = math.pi * 0.18
+        return (self.x + math.cos(ang) * r * 0.86, self.y - r * 0.05 + math.sin(ang) * r * 0.86)
+
+    def draw_leash(self, cr, r):
+        """Easter egg (Korn): ...on a leash, held by someone above the top of the screen. It
+        goes taut when the blob jumps up toward it and sags when it's far below."""
+        k = self.korn
+        rx, ry = self.leash_ring(r)
+        rx += self.shake[0]
+        ry += self.shake[1]
+        tx, ty = self.leash_x + r * 0.5, -20.0
+        span = max(1.0, ry - ty)
+        sag = r * 0.6 * clamp01(1 - span / 900) + r * 0.25    # slack when it's close
+        cr.save()
+        cr.move_to(rx, ry)
+        cr.curve_to(rx + sag, ry - span * 0.3, tx + sag, ty + span * 0.4, tx, ty)
+        cr.set_line_cap(cairo.LINE_CAP_ROUND)
+        cr.set_source_rgba(0.08, 0.08, 0.09, k)
+        cr.set_line_width(max(3, r * 0.05))
+        cr.stroke_preserve()
+        cr.set_source_rgba(0.6, 0.15, 0.15, k)                # red stitching
+        cr.set_line_width(max(1, r * 0.015))
+        cr.stroke()
+        cr.restore()
+
+    def draw_headphones(self, cr, face_y, r):
+        """Easter egg (Linkin Park): big DJ headphones; the LEDs on the cups blink on the beat."""
+        k = self.linkin
+        cy = face_y + r * 0.02
+        cr.save()
+        cr.set_line_cap(cairo.LINE_CAP_ROUND)
+        # headband over the top of the head
+        cr.arc(self.x, cy, r * 0.98, math.pi + 0.35, TAU - 0.35)
+        cr.set_source_rgba(0.08, 0.08, 0.09, k)
+        cr.set_line_width(r * 0.11)
+        cr.stroke()
+        cr.arc(self.x, cy, r * 0.98, math.pi + 0.5, TAU - 0.5)
+        cr.set_source_rgba(0.35, 0.35, 0.38, k)
+        cr.set_line_width(r * 0.03)
+        cr.stroke()
+        for side in (-1, 1):
+            cx = self.x + side * r * 0.93
+            # ear cup
+            cr.save()
+            cr.translate(cx, cy)
+            cr.scale(r * 0.17, r * 0.3)
+            cr.arc(0, 0, 1, 0, TAU)
+            cr.restore()
+            cr.set_source_rgba(0.1, 0.1, 0.11, k)
+            cr.fill_preserve()
+            cr.set_source_rgba(0.75, 0.05, 0.08, k)          # red rim
+            cr.set_line_width(max(2, r * 0.035))
+            cr.stroke()
+            # LED blinks with the drums
+            cr.arc(cx + side * r * 0.04, cy - r * 0.1, r * 0.035, 0, TAU)
+            cr.set_source_rgba(1.0, 0.15 + 0.6 * self.penta_pulse, 0.1, k * (0.4 + 0.6 * self.penta_pulse))
+            cr.fill()
+        cr.restore()
+
+    def draw_scream_waves(self, cr, y, mw, r):
+        """Easter egg (Linkin Park): sound waves blasting out of the screaming mouth."""
+        k = self.scream
+        cr.save()
+        cr.set_line_cap(cairo.LINE_CAP_ROUND)
+        cr.set_line_width(max(2, r * 0.035))
+        for i in range(3):
+            ph = (self.t * 2.2 + i / 3) % 1.0
+            rad = mw * 0.8 + ph * r * 1.1
+            for side in (-1, 1):
+                mid = 0.0 if side > 0 else math.pi
+                cr.new_sub_path()
+                cr.arc(self.x, y, rad, mid - 0.5, mid + 0.5)
+            cr.set_source_rgba(1, 1, 1, 0.75 * k * (1 - ph))
+            cr.stroke()
+        cr.restore()
 
     def draw_flash(self, cr):
         """Full-screen colour flash on a drop."""
@@ -1360,7 +1694,7 @@ class Blob:
                   self.nod * 0.45, bliss) * (1 - self.spiral)
         # Kurt: X eyes in the loud parts (shut lids with an X drawn over them)
         xeyes = clamp01((self.kurt * self.grunge - 0.35) / 0.3) * (1 - self.cool)
-        lid = max(lid, xeyes)
+        lid = max(lid, xeyes, 0.55 * self.scream)    # squeezes its eyes while screaming
 
         # rosy cheeks
         if M > 0.02:
@@ -1405,12 +1739,15 @@ class Blob:
             self.draw_brow(cr, ex_, ey_, er, r, side=-1 if i == 0 else 1, idx=i)
 
         # forehead: the third eye gives way to a pentagram when it gets heavy
-        third = self.third_eye * clamp01(1 - self.heavy * 2)
+        # (Tool: the third eye stays wide open, even through the heaviest riffs)
+        third = max(self.third_eye * clamp01(1 - self.heavy * 2), self.tool)
         if third > 0.01:
             s = min(1, third * 2)
+            if self.tool > 0.01:
+                self.draw_seed_of_life(cr, self.x, face_y - r * 0.5, r * 0.16 * s, self.tool)
             self.draw_eye(cr, self.x, face_y - r * 0.5, r * 0.16 * s, self.pupils[0], 0, a,
                           hue_eye=True, idx=2)
-        if self.heavy > 0.15:
+        if self.heavy > 0.15 and self.tool < 0.5:
             self.draw_pentagram(cr, self.x, face_y - r * 0.7, r * 0.2)
         elif self.wright > 0.01:
             self.draw_mini_prism(cr, self.x, face_y - r * 0.68, r * 0.17)
@@ -1420,6 +1757,9 @@ class Blob:
         mw = r * 0.42 * lerp(0.6, 1.25, m) * (1 - yawn_open * 0.45) * (1 + 0.3 * M)
         mh = r * (0.04 + min(a.level, 1.2) * 0.32) * lerp(0.35, 1.5, m) * (1 - sleepy) * (1 - 0.5 * M)
         mh = max(mh, r * 0.55 * yawn_open)
+        sc = self.scream                          # Linkin Park: SCREAMS the chorus
+        mh = lerp(mh, r * (0.5 + 0.12 * min(a.level, 1.2)), sc)
+        mw *= 1 - 0.25 * sc
         mh *= 1 - 0.75 * self.cool                # too cool to open its mouth much
         my = face_y + r * 0.42
         tilt = r * 0.12 * L * (1 - M)            # one corner droops: "meh"
@@ -1467,6 +1807,10 @@ class Blob:
 
         if xeyes > 0.02:
             self.draw_tongue(cr, self.x + mw * 0.3, my + mh * 0.5, r, xeyes)
+        if self.scream > 0.05:
+            self.draw_scream_waves(cr, my + mh * 0.3, mw, r)
+        if self.linkin > 0.01:
+            self.draw_headphones(cr, face_y, r)
         if self.layne > 0.01 and self.cool < 0.99:
             self.draw_round_glasses(cr, drawn_eyes, r, self.layne * (1 - self.cool))
         if self.kurt > 0.01 and self.cool < 0.99:
@@ -1824,18 +2168,11 @@ class Blob:
         k = self.desert
         if k < 0.01:
             return
-        R = min(W, H) * 0.3 * (1 + 0.06 * min(a.bass, 1.5))
+        R = min(W, H) * 0.22 * (1 + 0.06 * min(a.bass, 1.5))
         cx, cy = W * 0.5, H * 0.62
         top = (1.0, 0.92, 0.35)
         mid = (1.0, 0.45, 0.12)
         bot = (0.85, 0.1, 0.45)
-        # soft halo
-        g = cairo.RadialGradient(cx, cy, R * 0.8, cx, cy, R * 1.8)
-        g.add_color_stop_rgba(0, 1.0, 0.5, 0.15, 0.18 * k)
-        g.add_color_stop_rgba(1, 1.0, 0.3, 0.3, 0)
-        cr.set_source(g)
-        cr.arc(cx, cy, R * 1.8, 0, TAU)
-        cr.fill()
         n = 40
         h = 2 * R / n
         scroll = (self.t * 0.25) % 1.0
@@ -1855,6 +2192,107 @@ class Blob:
             cr.set_source_rgba(*c, 0.55 * k)
             cr.rectangle(cx - half + shimmer, y, 2 * half, h + 0.5)
             cr.fill()
+
+    def draw_mandala(self, cr, a, r):
+        """Easter egg (Tool): a fractal mandala of hexagrams spinning behind the blob (every
+        hexagon spawns smaller, counter-rotating ones at its corners), wrapped in a golden
+        spiral. It breathes with the bass and flares on the drums.
+        Hundreds of overlapping strokes are too slow to draw every frame, so it's drawn into an
+        offscreen image that is pasted each frame. The next image is drawn in the background a
+        third at a time (big shapes, small hexagons, spiral), then swapped in, so no single
+        frame pays for all of it."""
+        half = int(r * 3.4) + 4            # fits the mandala and spiral at their biggest
+        if self.mandala is None or self.mandala["half"] != half:
+            self.mandala = {"half": half, "stage": 0, "shown": False,
+                            "bufs": [cairo.ImageSurface(cairo.FORMAT_ARGB32, 2 * half, 2 * half)
+                                     for _ in range(2)]}
+        m = self.mandala
+        back = m["bufs"][1]
+        c = cairo.Context(back)
+        c.set_antialias(cairo.ANTIALIAS_FAST)
+        c.translate(half, half)
+        if m["stage"] == 0:
+            c.save()
+            c.set_operator(cairo.OPERATOR_CLEAR)
+            c.paint()
+            c.restore()
+            m["geo"] = self.mandala_geometry(a, r)
+        self.render_mandala(c, r, m["geo"], m["stage"])
+        m["stage"] = (m["stage"] + 1) % 3
+        if m["stage"] == 0:
+            m["bufs"].reverse()
+            m["shown"] = True
+        if m["shown"]:
+            cr.set_source_surface(m["bufs"][0], self.x - half, self.y - half)
+            cr.paint()
+
+    def mandala_geometry(self, a, r):
+        """Where every hexagon of the mandala goes, plus what the rest of the drawing needs."""
+        t = self.anim_t
+        pulse = 1 + 0.08 * min(a.bass, 1.5) + 0.12 * self.penta_pulse
+        levels = [[] for _ in range(3)]
+
+        def grow(cx, cy, size, ang, depth):
+            levels[depth].append((cx, cy, size, ang))
+            if depth < 2:
+                for j in range(6):
+                    va = ang + j * TAU / 6
+                    grow(cx + math.cos(va) * size, cy + math.sin(va) * size, size * 0.42,
+                         -ang * 1.7 + t * 0.2, depth + 1)
+
+        grow(0.0, 0.0, r * 1.6 * pulse, t * 0.15, 0)
+        return {"levels": levels, "t": t, "pulse": pulse, "k": self.tool, "flare": self.penta_pulse}
+
+    def render_mandala(self, cr, r, geo, stage):
+        """Draw one stage of the mandala centred on (0, 0): 0 = the two big levels of hexagons
+        with hexagrams inside, 1 = the small hexagons, 2 = the golden spiral."""
+        k, t = geo["k"], geo["t"]
+        cr.set_line_join(cairo.LINE_JOIN_ROUND)
+        if stage < 2:
+            for depth in ((0, 1) if stage == 0 else (2,)):
+                for cx, cy, size, ang in geo["levels"][depth]:
+                    # hexagon, with a hexagram (two triangles) inside on the big ones
+                    for j in range(6):
+                        va = ang + j * TAU / 6
+                        (cr.move_to if j == 0 else cr.line_to)(cx + math.cos(va) * size,
+                                                               cy + math.sin(va) * size)
+                    cr.close_path()
+                    for off in ((0, 1) if depth < 2 else ()):
+                        for j in range(3):
+                            va = ang + (2 * j + off) * TAU / 6
+                            (cr.move_to if j == 0 else cr.line_to)(cx + math.cos(va) * size,
+                                                                   cy + math.sin(va) * size)
+                        cr.close_path()
+                col = hsv(0.12 + depth * 0.4 + 0.04 * math.sin(t * 0.3), 0.8, 1)  # gold, cyan, magenta
+                cr.set_source_rgba(*col, k * (0.6 - 0.12 * depth + 0.3 * geo["flare"]))
+                cr.set_line_width(max(1, r * 0.015) / (depth * 0.5 + 1))
+                cr.stroke()
+            return
+        # golden spiral (r = a * phi^(2θ/π)), two arms, slowly turning the other way
+        b = math.log((1 + 5 ** 0.5) / 2) / (math.pi / 2)
+        for arm in (0, math.pi):
+            for i in range(121):
+                th = i / 120 * 4 * math.pi
+                rr = r * 0.055 * math.exp(b * th) * geo["pulse"]
+                ang = th + arm - t * 0.3
+                (cr.move_to if i == 0 else cr.line_to)(math.cos(ang) * rr, math.sin(ang) * rr)
+        cr.set_source_rgba(1.0, 0.82, 0.35, 0.6 * k)
+        cr.set_line_width(max(1.5, r * 0.025))
+        cr.stroke()
+
+    def draw_seed_of_life(self, cr, x, y, er, k):
+        """Easter egg (Tool): six overlapping circles in gold around the third eye."""
+        cr.save()
+        cr.set_line_width(max(1, er * 0.08))
+        for j in range(6):
+            va = j * TAU / 6 + self.t * 0.3
+            cr.new_sub_path()
+            cr.arc(x + math.cos(va) * er * 1.1, y + math.sin(va) * er * 1.1, er * 1.1, 0, TAU)
+        cr.new_sub_path()
+        cr.arc(x, y, er * 2.2, 0, TAU)
+        cr.set_source_rgba(1.0, 0.82, 0.35, 0.8 * k)
+        cr.stroke()
+        cr.restore()
 
     def draw_mini_prism(self, cr, x, y, size):
         """Easter egg (Richard Wright): a little glowing prism on the forehead."""
@@ -2098,6 +2536,27 @@ class Blob:
             cr.restore()
             cr.fill()
             return
+        if p.kind == "paint":
+            # graffiti splat: blob, a few satellite drops, and a drip that runs down over time
+            al = min(1.0, f * 3)
+            col = (0.05, 0.05, 0.06) if p.hue == 0.58 else hsv(p.hue, 0.95, 0.95)
+            if p.hue == 0.14:
+                col = (0.96, 0.96, 0.94)                     # white
+            cr.set_source_rgba(*col, al)
+            s = p.size
+            cr.arc(p.x, p.y, s, 0, TAU)
+            cr.new_sub_path()
+            for j in range(3):
+                ang = p.max * 40 + j * 2.1                  # fixed per splat (rot spins)
+                cr.arc(p.x + math.cos(ang) * s * 1.7, p.y + math.sin(ang) * s * 1.7, s * 0.3, 0, TAU)
+                cr.new_sub_path()
+            drip = s * 4 * (1 - f) if math.hypot(p.vx, p.vy) < 40 else 0.0
+            if drip > 1:
+                cr.rectangle(p.x - s * 0.25, p.y, s * 0.5, drip)
+                cr.new_sub_path()
+                cr.arc(p.x, p.y + drip, s * 0.3, 0, TAU)
+            cr.fill()
+            return
         if p.kind == "sand":
             cr.set_source_rgba(*hsv(p.hue, 0.45, 0.95), 0.85 * min(1, f * 4, (1 - f) * 8))
             cr.arc(p.x, p.y, p.size, 0, TAU)
@@ -2247,6 +2706,10 @@ class Overlay(Gtk.Window):
         self.blob.wright_target = 1.0 if np_.wright else 0.0
         self.blob.kurt_target = 1.0 if np_.kurt else 0.0
         self.blob.desert_target = 1.0 if np_.garcia else 0.0
+        self.blob.tool_target = 1.0 if np_.tool else 0.0
+        self.blob.korn_target = 1.0 if np_.korn else 0.0
+        self.blob.nin_target = 1.0 if np_.nin else 0.0
+        self.blob.linkin_target = 1.0 if np_.linkin else 0.0
         self.queue_draw()
         return GLib.SOURCE_CONTINUE
 

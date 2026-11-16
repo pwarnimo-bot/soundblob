@@ -22,13 +22,18 @@ Toggle the oscilloscope: pkill -USR2 -f '^python3 \S*soundblob\.py( |$)'
 import argparse
 import collections
 import colorsys
+import json
 import math
+import os
 import random
 import signal
 import subprocess
 import sys
 import threading
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 
 import numpy as np
 import cairo
@@ -73,6 +78,7 @@ LOUD_RISE, LOUD_FALL, LOUD_RESET_SILENCE = 5.0, 40.0, 1.0
 # "heavy" (dark body + pentagram): distortion above the horns' range, at the song's loud parts
 HEAVY_AGGR_LO, HEAVY_AGGR_HI = 0.55, 0.85
 DARK = (0.07, 0.0, 0.02)   # the colour a fully heavy blob fades to
+MEMPHIS_HUES = (0.48, 0.78, 0.92, 0.14)   # 90s confetti: teal, purple, hot pink, yellow
 VIGNETTE_ALPHA = 0.65      # darkness of the screen corners at full heaviness
 # "mellow" (smile, rosy cheeks, gentle sway): clean guitars at low energy (acoustic, ballads,
 # quiet grunge). Fully mellow below MELLOW_E_LO energy, gone above MELLOW_E_HI or with distortion.
@@ -607,6 +613,111 @@ def garcia_on(artists, title, album=""):
     return _plays_on(artists, title, album, GARCIA_BANDS)
 
 
+class ReleaseDates:
+    """Finds out when a song first came out, so the blob knows which era it's dancing to.
+    Spotify's MPRIS metadata has no date, so it asks MusicBrainz (the open music database, no
+    account needed) in a background thread, once per song: the earliest release of any
+    recording of that title by that artist or of the album it's on, whichever is earlier.
+    Answers, including "not found", are cached in ~/.cache/soundblob/release-dates.json."""
+
+    API = "https://musicbrainz.org/ws/2/"
+    HEADERS = {"User-Agent": "soundblob/1.0", "Accept": "application/json"}
+
+    def __init__(self, enabled=True):
+        self.enabled = enabled
+        base = os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache")
+        self.path = os.path.join(base, "soundblob", "release-dates.json")
+        try:
+            with open(self.path) as f:
+                self.cache = json.load(f)
+        except (OSError, ValueError):
+            self.cache = {}
+        self.queue = collections.deque()
+        self.queued = set()
+        self.failed = {}                 # key -> when a lookup failed (network); retried later
+        self.wake = threading.Event()
+        if enabled:
+            threading.Thread(target=self._worker, daemon=True).start()
+
+    @staticmethod
+    def key(artist, title):
+        return f"{_norm(artist)}|{_norm(title)}"
+
+    def get(self, artist, title, album):
+        """'1991-09-24', '1991' or similar if known, '' if MusicBrainz doesn't know,
+        None while it's being looked up."""
+        k = self.key(artist, title)
+        if k in self.cache:
+            return self.cache[k]
+        if (self.enabled and k not in self.queued
+                and time.monotonic() - self.failed.get(k, -1e9) > 120):
+            self.queued.add(k)
+            self.queue.append((k, artist, title, album))
+            self.wake.set()
+        return None
+
+    def _worker(self):
+        while True:
+            self.wake.wait()
+            self.wake.clear()
+            while self.queue:
+                k, artist, title, album = self.queue.popleft()
+                try:
+                    self.cache[k] = self._lookup(artist, title, album)
+                    self._save()
+                except Exception:          # offline, timeout, rate limited, bad answer...
+                    self.failed[k] = time.monotonic()
+                self.queued.discard(k)
+                time.sleep(1.1)            # MusicBrainz allows one request per second
+
+    def _search(self, entity, query):
+        url = f"{self.API}{entity}/?fmt=json&limit=100&query={urllib.parse.quote(query)}"
+        req = urllib.request.Request(url, headers=self.HEADERS)
+        for attempt in range(4):
+            try:
+                with urllib.request.urlopen(req, timeout=10) as r:
+                    return json.load(r)
+            except urllib.error.HTTPError as e:
+                # 503 = "slow down": MusicBrainz is busy or we were a bit too fast
+                if e.code not in (429, 503) or attempt == 3:
+                    raise
+                time.sleep(2 * (attempt + 1))
+
+    @staticmethod
+    def _q(text):
+        return '"' + text.replace("\\", " ").replace('"', " ") + '"'
+
+    def _lookup(self, artist, title, album):
+        def plain(name):                   # 'Lithium - Remastered' -> 'Lithium'
+            return name.split(" - ")[0].split(" (")[0].split(" [")[0].strip()
+
+        def earliest(items):
+            dates = [i.get("first-release-date") for i in items if i.get("score", 0) >= 95]
+            return min((d for d in dates if d), default="")
+
+        # popular songs have so many live versions that the original recording can be missing
+        # from the results, so the album's first release is checked too; the earliest wins
+        found = [earliest(self._search(
+            "recording", f"recording:{self._q(plain(title))} AND artist:{self._q(artist)}")
+            .get("recordings", []))]
+        if album:
+            time.sleep(1.1)
+            found.append(earliest(self._search(
+                "release-group", f"releasegroup:{self._q(plain(album))} AND artist:{self._q(artist)}")
+                .get("release-groups", [])))
+        return min((d for d in found if d), default="")
+
+    def _save(self):
+        try:
+            os.makedirs(os.path.dirname(self.path), exist_ok=True)
+            tmp = self.path + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump(self.cache, f)
+            os.replace(tmp, self.path)
+        except OSError:
+            pass
+
+
 class NowPlaying:
     """Asks Spotify (over MPRIS on the session bus) what's playing, every couple of seconds.
     Easter eggs: Mark Lanegan gets the blob into sunglasses and a cigarette, Layne Staley into
@@ -618,11 +729,13 @@ class NowPlaying:
 
     BUS_NAME = "org.mpris.MediaPlayer2.spotify"
 
-    def __init__(self):
+    def __init__(self, lookup_dates=True):
         self.artists = []
         self.title = ""
         self.album = ""
         self.playing = False
+        self.dates = ReleaseDates(lookup_dates)
+        self.track_start = time.monotonic()   # for the VHS counter
         try:
             self.bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
         except GLib.Error:
@@ -647,12 +760,22 @@ class NowPlaying:
 
     def _on_metadata(self, conn, res):
         md = self._get(conn, res) or {}
-        self.artists = list(md.get("xesam:artist") or [])
-        self.title = md.get("xesam:title") or ""
+        artists = list(md.get("xesam:artist") or [])
+        title = md.get("xesam:title") or ""
+        if (artists, title) != (self.artists, self.title):
+            self.track_start = time.monotonic()
+        self.artists, self.title = artists, title
         self.album = md.get("xesam:album") or ""
 
     def _on_status(self, conn, res):
         self.playing = self._get(conn, res) == "Playing"
+
+    @property
+    def released(self):
+        """When the playing song first came out ('1994-03-08', '1994', ...), or None."""
+        if not (self.playing and self.artists and self.title):
+            return None
+        return self.dates.get(self.artists[0], self.title, self.album) or None
 
     @property
     def lanegan(self):
@@ -809,6 +932,11 @@ class Blob:
         self.linkin = 0.0          # easter egg: headphones, graffiti splats, screams (Linkin Park)
         self.linkin_target = 0.0
         self.scream = 0.0          # loud chorus while Linkin Park is on
+        # era awareness (release year from MusicBrainz): the 90s and the early 2000s
+        self.era90 = 0.0           # backwards cap, Memphis-pattern confetti, VHS camcorder overlay
+        self.era90_target = 0.0
+        self.y2k = 0.0             # frosted tips, glossy sheen, sparkles, orange camera date stamp
+        self.y2k_target = 0.0
 
     @property
     def lazy(self):
@@ -862,6 +990,8 @@ class Blob:
         self.nin += (self.nin_target - self.nin) * min(1, dt * 1.5)
         self.glitch = max(0.0, self.glitch - dt * 5)
         self.linkin += (self.linkin_target - self.linkin) * min(1, dt * 1.5)
+        self.era90 += (self.era90_target - self.era90) * min(1, dt * 1.5)
+        self.y2k += (self.y2k_target - self.y2k) * min(1, dt * 1.5)
         self.scream = self.linkin * clamp01((self.grunge - 0.45) / 0.4)
         if self.korn > 0.01:
             # dreads whip against the motion and fly up when falling; the leash trails behind
@@ -1244,9 +1374,16 @@ class Blob:
             ang = random.uniform(0, TAU)
             sp = random.uniform(120, 520) * (0.6 + s * 0.3) * lerp(0.6, 1.3, m)
             kind = random.choice(("dot", "dot", "star", "tri", "squig"))
+            hue = self.hue + random.random()
+            if random.random() < self.era90:
+                # 90s: Memphis-pattern squiggles and triangles in teal, purple, pink and yellow
+                kind = random.choice(("tri", "squig", "squig", "dot"))
+                hue = random.choice(MEMPHIS_HUES)
+            elif random.random() < self.y2k:
+                kind = "glint"                     # early 2000s: chrome four-point sparkles
             self.emit(Particle(
                 self.x, self.y, math.cos(ang) * sp, math.sin(ang) * sp,
-                random.uniform(0.6, 1.5), self.hue + random.random(), random.uniform(4, 11), kind))
+                random.uniform(0.6, 1.5), hue, random.uniform(4, 11), kind))
 
     def splash(self, speed, ang, r):
         n = int(min(speed / 120, 14))
@@ -1405,6 +1542,18 @@ class Blob:
         cr.arc(0, 0, r * 0.22, 0, TAU)
         cr.fill()
         cr.restore()
+        if self.y2k > 0.01:
+            # early 2000s: glossy, candy-like "aqua" sheen across the top
+            cr.save()
+            cr.translate(self.x, self.y - r * 0.52)
+            cr.scale(r * 0.62, r * 0.3)
+            cr.arc(0, 0, 1, 0, TAU)
+            cr.restore()
+            g = cairo.LinearGradient(0, self.y - r * 0.82, 0, self.y - r * 0.25)
+            g.add_color_stop_rgba(0, 1, 1, 1, 0.55 * self.y2k)
+            g.add_color_stop_rgba(1, 1, 1, 1, 0)
+            cr.set_source(g)
+            cr.fill()
 
         if self.horns > 0.02:
             self.draw_horns(cr, r)
@@ -1641,6 +1790,85 @@ class Blob:
             cr.stroke()
         cr.restore()
 
+    def draw_cap(self, cr, face_y, r, k):
+        """90s: a baseball cap worn backwards, the brim sticking out behind the head."""
+        cy = face_y - r * 0.6
+        cr.save()
+        cr.translate(self.x, cy)
+        cr.rotate(-0.12 + 0.05 * math.sin(self.sway))
+        # brim, behind the crown
+        cr.save()
+        cr.translate(r * 0.42, -r * 0.42)
+        cr.rotate(-0.45)
+        cr.scale(r * 0.42, r * 0.11)
+        cr.arc(0, 0, 1, 0, TAU)
+        cr.restore()
+        cr.set_source_rgba(*hsv(0.78, 0.7, 0.55), k)
+        cr.fill()
+        # crown
+        cr.save()
+        cr.scale(1, 0.78)
+        cr.arc(0, 0, r * 0.72, math.pi, TAU)
+        cr.restore()
+        cr.close_path()
+        g = cairo.LinearGradient(0, -r * 0.56, 0, 0)
+        g.add_color_stop_rgba(0, *hsv(0.48, 0.75, 0.85), k)
+        g.add_color_stop_rgba(1, *hsv(0.48, 0.8, 0.6), k)
+        cr.set_source(g)
+        cr.fill()
+        # panel seams and the button on top
+        cr.set_source_rgba(0, 0.15, 0.15, 0.6 * k)
+        cr.set_line_width(max(1, r * 0.02))
+        for sx in (-0.35, 0.0, 0.35):
+            cr.move_to(sx * r, 0)
+            cr.curve_to(sx * r, -r * 0.3, sx * r * 0.3, -r * 0.5, 0, -r * 0.56)
+        cr.stroke()
+        cr.arc(0, -r * 0.56, r * 0.06, 0, TAU)
+        cr.set_source_rgba(*hsv(0.78, 0.7, 0.55), k)
+        cr.fill()
+        # backwards: the snapback opening and strap at the front
+        cr.arc(0, 0, r * 0.2, math.pi, TAU)
+        cr.close_path()
+        cr.set_source_rgba(*self.dark(hsv(self.hue, 1, 0.8)), k)
+        cr.fill()
+        cr.rectangle(-r * 0.2, -r * 0.07, r * 0.4, r * 0.05)
+        cr.set_source_rgba(0.1, 0.1, 0.12, k)
+        cr.fill()
+        cr.move_to(-r * 0.72, 0)
+        cr.line_to(r * 0.72, 0)
+        cr.set_source_rgba(*hsv(0.48, 0.8, 0.4), k)
+        cr.set_line_width(max(2, r * 0.05))
+        cr.stroke()
+        cr.restore()
+
+    def draw_frosted_tips(self, cr, r, k):
+        """Early 2000s: gelled, spiky hair with bleached frosted tips."""
+        n = 9
+        bases, tips = [], []
+        for j in range(n):
+            ang = -math.pi / 2 + (j / (n - 1) - 0.5) * 1.55
+            wob = 0.04 * math.sin(self.t * 3 + j * 1.7) - 0.05 * self.squash
+            a0, a1 = ang - 0.11, ang + 0.11
+            b0 = (self.x + math.cos(a0) * r * 0.86, self.y + math.sin(a0) * r * 0.86)
+            b1 = (self.x + math.cos(a1) * r * 0.86, self.y + math.sin(a1) * r * 0.86)
+            tl = r * (1.22 + 0.06 * (j % 2) + wob)
+            tip = (self.x + math.cos(ang + 0.08) * tl, self.y + math.sin(ang + 0.08) * tl)
+            bases.append((b0, b1))
+            tips.append(tip)
+        cr.save()
+        for frac, col in ((0.0, (0.35, 0.22, 0.1)), (0.5, (1.0, 0.93, 0.62))):
+            # first the whole spikes in brown, then their outer half bleached blonde
+            for (b0, b1), tip in zip(bases, tips):
+                p0 = (lerp(b0[0], tip[0], frac), lerp(b0[1], tip[1], frac))
+                p1 = (lerp(b1[0], tip[0], frac), lerp(b1[1], tip[1], frac))
+                cr.move_to(*p0)
+                cr.line_to(*tip)
+                cr.line_to(*p1)
+                cr.close_path()
+            cr.set_source_rgba(*col, k)
+            cr.fill()
+        cr.restore()
+
     def draw_flash(self, cr):
         """Full-screen colour flash on a drop."""
         if self.flash > 0.01:
@@ -1811,6 +2039,13 @@ class Blob:
             self.draw_scream_waves(cr, my + mh * 0.3, mw, r)
         if self.linkin > 0.01:
             self.draw_headphones(cr, face_y, r)
+        # era headwear, unless an easter egg already has something on (or growing out of) the head
+        bare = 1 - max(self.korn, self.linkin, self.tool, self.horns, self.wright,
+                       self.kurt * self.grunge, self.evil)
+        if self.era90 * bare > 0.01:
+            self.draw_cap(cr, face_y, r, self.era90 * bare)
+        if self.y2k * bare > 0.01:
+            self.draw_frosted_tips(cr, r, self.y2k * bare)
         if self.layne > 0.01 and self.cool < 0.99:
             self.draw_round_glasses(cr, drawn_eyes, r, self.layne * (1 - self.cool))
         if self.kurt > 0.01 and self.cool < 0.99:
@@ -2536,6 +2771,22 @@ class Blob:
             cr.restore()
             cr.fill()
             return
+        if p.kind == "glint":
+            # early 2000s: a silvery four-point sparkle with a hint of colour
+            s = p.size * (0.6 + 0.6 * f)
+            cr.save()
+            cr.translate(p.x, p.y)
+            cr.rotate(p.rot * 0.3)
+            cr.move_to(0, -s * 1.8)
+            for j in range(4):
+                a0 = -math.pi / 2 + j * math.pi / 2
+                cr.line_to(math.cos(a0 + math.pi / 4) * s * 0.3, math.sin(a0 + math.pi / 4) * s * 0.3)
+                cr.line_to(math.cos(a0 + math.pi / 2) * s * 1.8, math.sin(a0 + math.pi / 2) * s * 1.8)
+            cr.close_path()
+            cr.set_source_rgba(*hsv(p.hue, 0.25, 1), min(1, f * 1.5))
+            cr.fill()
+            cr.restore()
+            return
         if p.kind == "paint":
             # graffiti splat: blob, a few satellite drops, and a drip that runs down over time
             al = min(1.0, f * 3)
@@ -2646,7 +2897,8 @@ class Overlay(Gtk.Window):
         super().__init__(title="soundblob")
         self.audio = audio
         self.blob = Blob(args.size, confetti=args.confetti)
-        self.now_playing = NowPlaying()
+        self.now_playing = NowPlaying(lookup_dates=not args.no_lookup)
+        self.released = None
         self.last_time = None
         # FPS counter: frames actually drawn, averaged over half-second windows
         self.show_fps = not args.no_fps
@@ -2710,6 +2962,10 @@ class Overlay(Gtk.Window):
         self.blob.korn_target = 1.0 if np_.korn else 0.0
         self.blob.nin_target = 1.0 if np_.nin else 0.0
         self.blob.linkin_target = 1.0 if np_.linkin else 0.0
+        self.released = np_.released
+        year = int(self.released[:4]) if self.released and self.released[:4].isdigit() else 0
+        self.blob.era90_target = 1.0 if 1990 <= year <= 1999 else 0.0
+        self.blob.y2k_target = 1.0 if 2000 <= year <= 2004 else 0.0
         self.queue_draw()
         return GLib.SOURCE_CONTINUE
 
@@ -2726,6 +2982,7 @@ class Overlay(Gtk.Window):
         if self.show_scope:
             self.draw_scope(cr)
         self.blob.draw(cr, self.audio)
+        self.draw_era_stamp(cr)
         if self.show_fps:
             self.draw_fps(cr)
         t1 = time.perf_counter()
@@ -2736,6 +2993,70 @@ class Overlay(Gtk.Window):
             self.draw_ms = self._fps_draw / self._fps_frames * 1000
             self._fps_frames, self._fps_draw, self._fps_since = 0, 0.0, t1
         return False
+
+    def draw_era_stamp(self, cr):
+        """90s songs get a VHS camcorder overlay (PLAY, tape counter, recording date); early-2000s
+        songs the orange date a point-and-shoot camera burns into the photo. The date is the
+        song's release date."""
+        b = self.blob
+        if (b.era90 < 0.01 and b.y2k < 0.01) or not self.released:
+            return
+        W, H = self.get_allocated_width(), self.get_allocated_height()
+        parts = self.released.split("-")
+        year = parts[0]
+        month = int(parts[1]) if len(parts) > 1 else 0
+        day = int(parts[2]) if len(parts) > 2 else 0
+        fs = max(14, H * 0.032)
+        pad = fs * 1.2
+        cr.save()
+        cr.select_font_face("Monospace", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
+        cr.set_font_size(fs)
+
+        def text(x, y, s, rgb, a, right=False):
+            if right:
+                x -= cr.text_extents(s).x_advance
+            cr.move_to(x + fs * 0.08, y + fs * 0.08)
+            cr.set_source_rgba(0, 0, 0, 0.6 * a)        # drop shadow
+            cr.show_text(s)
+            cr.move_to(x, y)
+            cr.set_source_rgba(*rgb, a)
+            cr.show_text(s)
+
+        k = b.era90
+        if k > 0.01:
+            # VHS: a little horizontal tracking jitter now and then
+            jx = random.uniform(-3, 3) if random.random() < 0.08 else 0.0
+            text(pad + jx, pad + fs, "PLAY", (1, 1, 1), 0.9 * k)
+            x = pad + jx + cr.text_extents("PLAY ").x_advance
+            cr.move_to(x, pad + fs * 0.18)
+            cr.line_to(x + fs * 0.75, pad + fs * 0.58)
+            cr.line_to(x, pad + fs * 0.98)
+            cr.close_path()
+            cr.set_source_rgba(1, 1, 1, 0.9 * k)
+            cr.fill()
+            el = int(time.monotonic() - self.now_playing.track_start)
+            text(pad + jx, H - pad, f"SP  {el // 3600}:{el // 60 % 60:02d}:{el % 60:02d}",
+                 (1, 1, 1), 0.9 * k)
+            months = "JAN FEB MAR APR MAY JUN JUL AUG SEP OCT NOV DEC".split()
+            date = " ".join(p for p in ((months[month - 1] + ".") if month else "",
+                                        str(day) if day else "", year) if p)
+            text(W - pad + jx, H - pad, date, (1, 1, 1), 0.9 * k, right=True)
+        k = b.y2k
+        if k > 0.01:
+            stamp = f"'{year[2:]} {month if month else ''} {day if day else ''}".strip()
+            stamp = " ".join(stamp.split())
+            cr.set_font_size(fs * 1.1)
+            x = W - pad * 1.5 - cr.text_extents(stamp).x_advance
+            y = H - pad * 2.2
+            cr.move_to(x, y)
+            cr.text_path(stamp)
+            cr.set_source_rgba(1.0, 0.4, 0.05, 0.3 * k)      # soft glow around the digits
+            cr.set_line_width(fs * 0.18)
+            cr.set_line_join(cairo.LINE_JOIN_ROUND)
+            cr.stroke_preserve()
+            cr.set_source_rgba(1.0, 0.58, 0.1, 0.95 * k)
+            cr.fill()
+        cr.restore()
 
     def draw_vignette(self, cr):
         """Dark edges creeping in from the screen corners when the music gets heavy."""
@@ -2842,6 +3163,9 @@ def main():
     ap.add_argument("--no-scope", action="store_true", help="hide the oscilloscope line")
     ap.add_argument("--no-vignette", action="store_true",
                     help="don't darken the screen edges when the music gets heavy")
+    ap.add_argument("--no-lookup", action="store_true",
+                    help="don't look up songs' release years on MusicBrainz "
+                         "(the blob then can't tell 90s and early-2000s songs apart)")
     ap.add_argument("--debug", action="store_true",
                     help="print what the analyzer hears (tempo, drums, mood...) once a second")
     args = ap.parse_args()

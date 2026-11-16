@@ -606,6 +606,12 @@ def linkin_on(artists, title, album=""):
         "fort minor"})
 
 
+def rage_on(artists, title, album=""):
+    """Is this Rage Against the Machine (or Zack's and the band's other projects)?"""
+    return _plays_on(artists, title, album, {
+        "rage against the machine", "zack de la rocha", "one day as a lion", "prophets of rage"})
+
+
 def garcia_on(artists, title, album=""):
     """Is John Garcia singing on this track?"""
     if any("john garcia" in a.lower() for a in artists):
@@ -725,7 +731,8 @@ class NowPlaying:
     white shades that come off for X eyes when the chorus kicks in, and John Garcia sends it
     tripping through the desert. Tool opens its third eye inside a spinning fractal mandala, Korn
     gives it dreadlocks and a spiked collar on a leash, Nine Inch Nails glitches it, and Linkin
-    Park puts on headphones, sprays graffiti paint and screams the choruses."""
+    Park puts on headphones, sprays graffiti paint and screams the choruses. Rage Against the
+    Machine masks it with a bandana under a red star and kill-switch stutters it."""
 
     BUS_NAME = "org.mpris.MediaPlayer2.spotify"
 
@@ -808,6 +815,10 @@ class NowPlaying:
     @property
     def linkin(self):
         return self.playing and linkin_on(self.artists, self.title, self.album)
+
+    @property
+    def rage(self):
+        return self.playing and rage_on(self.artists, self.title, self.album)
 
     @property
     def garcia(self):
@@ -932,6 +943,9 @@ class Blob:
         self.linkin = 0.0          # easter egg: headphones, graffiti splats, screams (Linkin Park)
         self.linkin_target = 0.0
         self.scream = 0.0          # loud chorus while Linkin Park is on
+        self.rage = 0.0            # easter egg: bandana, red star, red & black, kill switch (RATM)
+        self.rage_target = 0.0
+        self.kill = 0.0            # seconds of kill-switch stutter left
         # era awareness (release year from MusicBrainz): the 90s and the early 2000s
         self.era90 = 0.0           # backwards cap, Memphis-pattern confetti, VHS camcorder overlay
         self.era90_target = 0.0
@@ -990,6 +1004,8 @@ class Blob:
         self.nin += (self.nin_target - self.nin) * min(1, dt * 1.5)
         self.glitch = max(0.0, self.glitch - dt * 5)
         self.linkin += (self.linkin_target - self.linkin) * min(1, dt * 1.5)
+        self.rage += (self.rage_target - self.rage) * min(1, dt * 1.5)
+        self.kill = max(0.0, self.kill - dt)
         self.era90 += (self.era90_target - self.era90) * min(1, dt * 1.5)
         self.y2k += (self.y2k_target - self.y2k) * min(1, dt * 1.5)
         self.scream = self.linkin * clamp01((self.grunge - 0.45) / 0.4)
@@ -1169,6 +1185,10 @@ class Blob:
             # desert: the body's colour is drawn into sunset reds, oranges and sand
             want = 0.06 + 0.07 * math.sin(self.t * 0.6)
             self.hue += (((want - self.hue) + 0.5) % 1.0 - 0.5) * self.desert * min(1, dt * 3)
+        if self.rage > 0.01:
+            # RATM: red (and, through dark(), black)
+            want = 0.99 + 0.02 * math.sin(self.t * 0.7)
+            self.hue += (((want - self.hue) + 0.5) % 1.0 - 0.5) * self.rage * min(1, dt * 3)
         if self.tool > 0.01:
             # Tool: deep indigo and violet, the colours of the visionary art
             want = 0.72 + 0.06 * math.sin(self.t * 0.4)
@@ -1224,7 +1244,7 @@ class Blob:
 
     def dark(self, rgb, k=0.85):
         """Fade a colour toward DARK as the music gets heavy."""
-        t = max(self.heavy, 0.5 * self.nin) * k      # NIN: dull, industrial steel
+        t = max(self.heavy, 0.5 * self.nin, 0.3 * self.rage) * k   # NIN: steel; RATM: red & black
         return tuple(c + (d - c) * t for c, d in zip(rgb, DARK))
 
     def emit(self, p):
@@ -1261,6 +1281,8 @@ class Blob:
         self.penta_pulse = 1.0
         if self.nin > 0.3 and random.random() < 0.5:
             self.glitch = 1.0
+        if self.rage > 0.5 and self.grunge > 0.4 and self.kill <= 0 and random.random() < 0.25:
+            self.kill = 0.35       # Morello's kill-switch stutter
         self.nod = min(1.0, 0.5 + 0.25 * s)
         self.squash_v += 1.5 + s * (0.5 + self.horns)
         self.squash_ang = -math.pi / 2
@@ -1470,6 +1492,8 @@ class Blob:
 
     def draw_body(self, cr, a, r, sat):
         """The blob itself: glow, body, outline, shine, horns and the rest, and its face."""
+        if self.kill > 0 and int(self.t * 22) % 2:
+            return     # RATM kill switch: the blob cuts out and back in like the guitar
         cr.save()
         cr.translate(*self.shake)
         # mellow: rocks its head side to side
@@ -1495,7 +1519,7 @@ class Blob:
             cr.scale(k, k)
             cr.translate(-self.x, -self.y)
             smooth_closed_path(cr, pts)
-            glow = hsv(self.hue + 0.5 * (1 - max(self.desert, self.tool)), sat)  # desert/Tool: on-palette
+            glow = hsv(self.hue + 0.5 * (1 - max(self.desert, self.tool, self.rage)), sat)  # eggs: on-palette
             glow = tuple(lerp(c, d, self.heavy) for c, d in zip(glow, (0.75, 0.0, 0.05)))
             cr.set_source_rgba(*glow, al + a.level * 0.08 + self.crazy * 0.08)
             cr.fill()
@@ -1521,7 +1545,7 @@ class Blob:
             ang = self.spin * (1 if j % 2 else -0.7) + j * TAU / 6 + math.sin(at + j) * 0.5
             dist = r * (0.35 + 0.25 * math.sin(at * 1.3 + j * 2))
             sr = r * (0.18 + 0.12 * a.spectrum[(j * 5) % 32])
-            spot = (0.25 + j * 0.13) * (1 - 0.8 * max(self.desert, self.tool))  # keep to the egg's hues
+            spot = (0.25 + j * 0.13) * (1 - 0.8 * max(self.desert, self.tool, self.rage))  # egg's hues
             cr.set_source_rgba(*self.dark(hsv(self.hue + spot, 0.9 * sat, 1), 0.9), 0.55)
             cr.arc(self.x + math.cos(ang) * dist, self.y + math.sin(ang) * dist, sr, 0, TAU)
             cr.fill()
@@ -1869,6 +1893,82 @@ class Blob:
             cr.fill()
         cr.restore()
 
+    def draw_red_star(self, cr, x, y, size):
+        """Easter egg (RATM): a red five-pointed star on the forehead, flaring on the drums."""
+        k = self.rage
+        size *= 1 + 0.15 * self.penta_pulse
+        cr.save()
+        for j in range(10):
+            ang = -math.pi / 2 + j * math.pi / 5
+            rr = size if j % 2 == 0 else size * 0.42
+            (cr.move_to if j == 0 else cr.line_to)(x + math.cos(ang) * rr, y + math.sin(ang) * rr)
+        cr.close_path()
+        cr.set_source_rgba(0.9, 0.05, 0.05, k)
+        cr.fill_preserve()
+        cr.set_source_rgba(0.0, 0.0, 0.0, k)
+        cr.set_line_width(max(2.5, size * 0.2))
+        cr.set_line_join(cairo.LINE_JOIN_MITER)
+        cr.stroke_preserve()
+        cr.set_source_rgba(1.0, 0.1, 0.08, k)                  # repaint the inside over the stroke
+        cr.fill()
+        cr.restore()
+
+    def draw_bandana(self, cr, face_y, my, mh, r):
+        """Easter egg (RATM): a bandana tied over the lower face. It puffs out as the blob
+        shouts, and the knot's tails flap at the side."""
+        k = self.rage
+        top = face_y + r * 0.2
+        bot = my + r * 0.42 + mh * 0.5                # bulges with the open mouth
+        half = r * 0.88
+        cr.save()
+        cr.move_to(self.x - half, top + r * 0.05)
+        cr.curve_to(self.x - half * 0.4, top - r * 0.06, self.x + half * 0.4, top - r * 0.06,
+                    self.x + half, top + r * 0.05)
+        cr.curve_to(self.x + half * 0.8, top + r * 0.35, self.x + r * 0.3, bot - r * 0.05,
+                    self.x, bot)
+        cr.curve_to(self.x - r * 0.3, bot - r * 0.05, self.x - half * 0.8, top + r * 0.35,
+                    self.x - half, top + r * 0.05)
+        cr.close_path()
+        path = cr.copy_path()
+        g = cairo.LinearGradient(0, top, 0, bot)
+        g.add_color_stop_rgba(0, 0.13, 0.12, 0.13, k)     # black, against the red body
+        g.add_color_stop_rgba(1, 0.04, 0.04, 0.05, k)
+        cr.set_source(g)
+        cr.fill()
+        # white paisley-ish dots, clipped to the cloth
+        cr.append_path(path)
+        cr.clip()
+        cr.set_source_rgba(1, 1, 1, 0.75 * k)
+        for i in range(-4, 5):
+            for j in range(4):
+                dx = (i + 0.5 * (j % 2)) * r * 0.2
+                dy = top + r * (0.08 + j * 0.15)
+                cr.new_sub_path()
+                cr.arc(self.x + dx, dy, r * (0.025 if (i + j) % 2 else 0.04), 0, TAU)
+        cr.fill()
+        cr.reset_clip()
+        # fold line and outline
+        cr.append_path(path)
+        cr.set_source_rgba(0.0, 0.0, 0.0, k)
+        cr.set_line_width(max(1.5, r * 0.025))
+        cr.stroke()
+        # knot and tails on the right, flapping
+        kx, ky = self.x + half * 0.95, top + r * 0.08
+        flap = math.sin(self.t * 9) * r * 0.06 - self.vx / 3000 * r
+        cr.set_source_rgba(0.08, 0.08, 0.09, k)
+        for d, ln in ((-1, 0.4), (1, 0.32)):
+            cr.move_to(kx, ky - r * 0.05)
+            cr.curve_to(kx + r * 0.15, ky + d * r * 0.02, kx + r * ln * 0.7, ky + d * r * 0.06 + flap,
+                        kx + r * ln, ky + d * r * 0.1 + flap)
+            cr.line_to(kx + r * ln * 0.85, ky + d * r * 0.3 + flap)
+            cr.curve_to(kx + r * ln * 0.6, ky + d * r * 0.22 + flap, kx + r * 0.1, ky + d * r * 0.12,
+                        kx, ky + r * 0.06)
+            cr.close_path()
+        cr.fill()
+        cr.arc(kx, ky, r * 0.06, 0, TAU)
+        cr.fill()
+        cr.restore()
+
     def draw_flash(self, cr):
         """Full-screen colour flash on a drop."""
         if self.flash > 0.01:
@@ -1975,8 +2075,10 @@ class Blob:
                 self.draw_seed_of_life(cr, self.x, face_y - r * 0.5, r * 0.16 * s, self.tool)
             self.draw_eye(cr, self.x, face_y - r * 0.5, r * 0.16 * s, self.pupils[0], 0, a,
                           hue_eye=True, idx=2)
-        if self.heavy > 0.15 and self.tool < 0.5:
+        if self.heavy > 0.15 and self.tool < 0.5 and self.rage < 0.5:
             self.draw_pentagram(cr, self.x, face_y - r * 0.7, r * 0.2)
+        elif self.rage > 0.01:
+            self.draw_red_star(cr, self.x, face_y - r * 0.68, r * 0.2)
         elif self.wright > 0.01:
             self.draw_mini_prism(cr, self.x, face_y - r * 0.68, r * 0.17)
 
@@ -2041,11 +2143,13 @@ class Blob:
             self.draw_headphones(cr, face_y, r)
         # era headwear, unless an easter egg already has something on (or growing out of) the head
         bare = 1 - max(self.korn, self.linkin, self.tool, self.horns, self.wright,
-                       self.kurt * self.grunge, self.evil)
+                       self.kurt * self.grunge, self.evil, self.rage)
         if self.era90 * bare > 0.01:
             self.draw_cap(cr, face_y, r, self.era90 * bare)
         if self.y2k * bare > 0.01:
             self.draw_frosted_tips(cr, r, self.y2k * bare)
+        if self.rage > 0.01:
+            self.draw_bandana(cr, face_y, my, mh, r)
         if self.layne > 0.01 and self.cool < 0.99:
             self.draw_round_glasses(cr, drawn_eyes, r, self.layne * (1 - self.cool))
         if self.kurt > 0.01 and self.cool < 0.99:
@@ -2966,6 +3070,7 @@ class Overlay(Gtk.Window):
         year = int(self.released[:4]) if self.released and self.released[:4].isdigit() else 0
         self.blob.era90_target = 1.0 if 1990 <= year <= 1999 else 0.0
         self.blob.y2k_target = 1.0 if 2000 <= year <= 2004 else 0.0
+        self.blob.rage_target = 1.0 if np_.rage else 0.0
         self.queue_draw()
         return GLib.SOURCE_CONTINUE
 

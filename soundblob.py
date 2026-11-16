@@ -497,19 +497,98 @@ def _norm(name):
     return " ".join("".join(c for c in name if c.isalnum() or c.isspace()).split())
 
 
+def _plays_on(artists, title, album, bands, albums=(), songs=(), skip=()):
+    """Does any of the artists match a whole band, an (artist, album) or an (artist, title),
+    unless that (artist, album/title) is in skip?"""
+    t, al = _norm(title), _norm(album)
+    for n in {_norm(a) for a in artists}:
+        if (n, al) in skip or (n, t) in skip:
+            continue
+        if n in bands or (n, al) in albums or (n, t) in songs:
+            return True
+    return False
+
+
 def lanegan_on(artists, title, album=""):
     """Is Mark Lanegan singing on this track?"""
     if any("lanegan" in a.lower() for a in artists) or "lanegan" in title.lower():
         return True
-    names = {_norm(a) for a in artists}
-    t, al = _norm(title), _norm(album)
-    return bool(names & LANEGAN_BANDS or any((n, al) in LANEGAN_ALBUMS or (n, t) in LANEGAN_SONGS
-                                              for n in names))
+    return _plays_on(artists, title, album, LANEGAN_BANDS, LANEGAN_ALBUMS, LANEGAN_SONGS)
+
+
+# Layne Staley easter egg: Alice in Chains up to 1996 (not the William DuVall albums),
+# Mad Season (minus the songs only Lanegan sings on), and his side projects.
+LAYNE_BANDS = {"alice in chains", "mad season", "class of 99", "alice mudgarden"}
+LAYNE_SKIP = {
+    ("alice in chains", "black gives way to blue"),
+    ("alice in chains", "the devil put dinosaurs here"),
+    ("alice in chains", "rainier fog"),
+    ("mad season", "locomotive"),
+    ("mad season", "black book of fear"),
+    ("mad season", "slip away"),
+}
+
+
+def layne_on(artists, title, album=""):
+    """Is Layne Staley singing on this track?"""
+    if any("staley" in a.lower() for a in artists):
+        return True
+    return _plays_on(artists, title, album, LAYNE_BANDS, skip=LAYNE_SKIP)
+
+
+# Richard Wright easter egg: all of Pink Floyd except The Final Cut (he'd left), his solo
+# work, and records he played on with David Gilmour and Syd Barrett.
+WRIGHT_BANDS = {"pink floyd", "richard wright", "rick wright"}
+WRIGHT_ALBUMS = {
+    ("david gilmour", "on an island"),
+    ("david gilmour", "live in gdansk"),
+    ("david gilmour", "remember that night"),
+    ("syd barrett", "barrett"),
+}
+WRIGHT_SONGS = {("david gilmour", "a boat lies waiting")}
+WRIGHT_SKIP = {("pink floyd", "the final cut"), ("pink floyd", "hey hey rise up")}
+
+
+def wright_on(artists, title, album=""):
+    """Is Richard Wright playing on this track?"""
+    return _plays_on(artists, title, album, WRIGHT_BANDS, WRIGHT_ALBUMS, WRIGHT_SONGS, WRIGHT_SKIP)
+
+
+# Kurt Cobain easter egg: Nirvana (not the 60s British band of the same name), his solo
+# demos, and a few records he guested on.
+KURT_BANDS = {"nirvana", "kurt cobain"}
+KURT_SONGS = {
+    ("mark lanegan", "where did you sleep last night"),
+    ("william s burroughs", "the priest they called him"),
+}
+KURT_SKIP = {("nirvana", al) for al in (
+    "the story of simon simopath", "all of us", "local anaesthetic", "dedicated to markos iii",
+    "songs of love and praise", "black flower", "orange and blue", "rainbow chaser")}
+
+
+def kurt_on(artists, title, album=""):
+    """Is Kurt Cobain on this track?"""
+    return _plays_on(artists, title, album, KURT_BANDS, songs=KURT_SONGS, skip=KURT_SKIP)
+
+
+# John Garcia easter egg: Kyuss and every band he has fronted since.
+GARCIA_BANDS = {"kyuss", "sons of kyuss", "kyuss lives", "unida", "slo burn", "hermano",
+                "vista chino", "john garcia", "john garcia and the band of gold"}
+
+
+def garcia_on(artists, title, album=""):
+    """Is John Garcia singing on this track?"""
+    if any("john garcia" in a.lower() for a in artists):
+        return True
+    return _plays_on(artists, title, album, GARCIA_BANDS)
 
 
 class NowPlaying:
     """Asks Spotify (over MPRIS on the session bus) what's playing, every couple of seconds.
-    Easter egg: Mark Lanegan gets the blob into sunglasses and a cigarette."""
+    Easter eggs: Mark Lanegan gets the blob into sunglasses and a cigarette, Layne Staley into
+    chains and red round glasses, Richard Wright turns it into a prism, and Kurt Cobain gets
+    white shades that come off for X eyes when the chorus kicks in, and John Garcia sends it
+    tripping through the desert."""
 
     BUS_NAME = "org.mpris.MediaPlayer2.spotify"
 
@@ -552,6 +631,22 @@ class NowPlaying:
     @property
     def lanegan(self):
         return self.playing and lanegan_on(self.artists, self.title, self.album)
+
+    @property
+    def layne(self):
+        return self.playing and layne_on(self.artists, self.title, self.album)
+
+    @property
+    def wright(self):
+        return self.playing and wright_on(self.artists, self.title, self.album)
+
+    @property
+    def kurt(self):
+        return self.playing and kurt_on(self.artists, self.title, self.album)
+
+    @property
+    def garcia(self):
+        return self.playing and garcia_on(self.artists, self.title, self.album)
 
 
 # --------------------------------------------------------------------------- helpers
@@ -649,6 +744,15 @@ class Blob:
         self.cool = 0.0            # easter egg: sunglasses + cigarette (Mark Lanegan on Spotify)
         self.cool_target = 0.0
         self.ember = None          # where the cigarette's tip was drawn (smoke rises from there)
+        self.layne = 0.0           # easter egg: chains + red round glasses (Layne Staley)
+        self.layne_target = 0.0
+        self.wright = 0.0          # easter egg: light through the blob like a prism (Richard Wright)
+        self.wright_target = 0.0
+        self.kurt = 0.0            # easter egg: white shades, X eyes in the loud parts (Kurt Cobain)
+        self.kurt_target = 0.0
+        self.grunge = 0.0          # loud-chorus level while Kurt is on (shades up, X eyes)
+        self.desert = 0.0          # easter egg: psychedelic desert trip (John Garcia / Kyuss)
+        self.desert_target = 0.0
 
     @property
     def lazy(self):
@@ -693,6 +797,18 @@ class Blob:
         self.nod = max(0.0, self.nod - dt * 7)
         self.flash = max(0.0, self.flash - dt * 3)
         self.cool += (self.cool_target - self.cool) * min(1, dt * 1.5)
+        self.layne += (self.layne_target - self.layne) * min(1, dt * 1.5)
+        self.wright += (self.wright_target - self.wright) * min(1, dt * 1.5)
+        self.kurt += (self.kurt_target - self.kurt) * min(1, dt * 1.5)
+        self.desert += (self.desert_target - self.desert) * min(1, dt * 0.8)
+        # desert: sand blowing across the screen on the hot wind
+        if self.desert > 0.2 and random.random() < dt * 25 * self.desert:
+            self.emit(Particle(
+                -10, H * random.uniform(0.35, 1.0), random.uniform(220, 480), random.uniform(-20, 10),
+                W / 220, random.uniform(0.07, 0.12), random.uniform(2.0, 4.5), "sand"))
+        # Nirvana's quiet verse / loud chorus: shades go up and the eyes go X on the loud parts
+        loud = 0.0 if quiet_level(level) else clamp01((a.loud_rel - 0.75) / 0.3)
+        self.grunge += (loud - self.grunge) * min(1, dt * (3.0 if loud > self.grunge else 1.2))
         if self.cool > 0.5 and self.ember and random.random() < dt * 7:
             ex, ey = self.ember
             self.particles.append(Particle(
@@ -851,6 +967,10 @@ class Blob:
         self.hue += dt * (0.01 + 0.06 * m + high * 0.15 * (0.3 + m) + self.charge * 0.5)
         if C > 0.5 and random.random() < dt * C * 3:
             self.hue += 0.33   # strobe
+        if self.desert > 0.01:
+            # desert: the body's colour is drawn into sunset reds, oranges and sand
+            want = 0.06 + 0.07 * math.sin(self.t * 0.6)
+            self.hue += (((want - self.hue) + 0.5) % 1.0 - 0.5) * self.desert * min(1, dt * 3)
 
         # trail: short when lazy, long rainbow smear when crazy
         self.trail.append((self.x, self.y, r, self.hue))
@@ -884,6 +1004,8 @@ class Blob:
             p.life -= dt
             if p.kind == "note":
                 p.vx += math.sin(self.t * 2 + p.rot) * 40 * dt   # lazy wobble, no gravity
+            elif p.kind == "sand":
+                p.vy += math.sin(self.t * 3 + p.rot) * 60 * dt    # tumbles on the wind
             elif p.kind == "smoke":
                 p.vx += math.sin(self.t * 1.5 + p.rot) * 30 * dt   # curls as it rises
                 p.size += dt * 9
@@ -1091,6 +1213,7 @@ class Blob:
     def draw(self, cr, a):
         r = self.radius(a.bass)
         sat = lerp(0.6, 1.0, clamp01(self.mood * 2))
+        sat *= 1 - 0.55 * self.layne      # Layne: washed-out, grungy colours
 
         # psychedelic ghost trail
         n = len(self.trail)
@@ -1114,6 +1237,14 @@ class Blob:
             cr.rotate(tilt)
             cr.translate(-self.x, -self.y)
         pts = self.outline(a, r)
+        if self.desert > 0.01:
+            # heat haze: the body shimmers and melts sideways in slow ripples
+            d, t = self.desert, self.t
+            pts = [(px + math.sin(py * 0.045 + t * 4.5) * r * 0.06 * d,
+                    py + math.sin(px * 0.03 - t * 2.0) * r * 0.025 * d) for px, py in pts]
+            self.draw_cactus_arms(cr, a, r)
+        if self.wright > 0.01:
+            self.draw_prism_light(cr, a, r)
 
         # glow (bigger and brighter while a build-up charges)
         for k, al in ((1.45 + 0.4 * self.charge, 0.06 + 0.12 * self.charge), (1.22, 0.10)):
@@ -1122,7 +1253,7 @@ class Blob:
             cr.scale(k, k)
             cr.translate(-self.x, -self.y)
             smooth_closed_path(cr, pts)
-            glow = hsv(self.hue + 0.5, sat)
+            glow = hsv(self.hue + 0.5 * (1 - self.desert), sat)   # desert: warm glow
             glow = tuple(lerp(c, d, self.heavy) for c, d in zip(glow, (0.75, 0.0, 0.05)))
             cr.set_source_rgba(*glow, al + a.level * 0.08 + self.crazy * 0.08)
             cr.fill()
@@ -1146,7 +1277,8 @@ class Blob:
             ang = self.spin * (1 if j % 2 else -0.7) + j * TAU / 6 + math.sin(at + j) * 0.5
             dist = r * (0.35 + 0.25 * math.sin(at * 1.3 + j * 2))
             sr = r * (0.18 + 0.12 * a.spectrum[(j * 5) % 32])
-            cr.set_source_rgba(*self.dark(hsv(self.hue + 0.25 + j * 0.13, 0.9 * sat, 1), 0.9), 0.55)
+            spot = (0.25 + j * 0.13) * (1 - 0.8 * self.desert)    # desert: keep to sunset hues
+            cr.set_source_rgba(*self.dark(hsv(self.hue + spot, 0.9 * sat, 1), 0.9), 0.55)
             cr.arc(self.x + math.cos(ang) * dist, self.y + math.sin(ang) * dist, sr, 0, TAU)
             cr.fill()
         cr.restore()
@@ -1167,6 +1299,8 @@ class Blob:
 
         if self.horns > 0.02:
             self.draw_horns(cr, r)
+        if self.layne > 0.01:
+            self.draw_chain(cr, r)
         self.draw_face(cr, a, r)
         cr.restore()
         for p in self.particles:
@@ -1224,6 +1358,9 @@ class Blob:
         bliss = math.sin(math.pi * (1 - self.bliss)) ** 0.3 if self.bliss > 0 else 0.0
         lid = max(self.blink, sleepy * 0.9, lerp(L * 0.5, 0.3, M), yawn_open * 0.85,
                   self.nod * 0.45, bliss) * (1 - self.spiral)
+        # Kurt: X eyes in the loud parts (shut lids with an X drawn over them)
+        xeyes = clamp01((self.kurt * self.grunge - 0.35) / 0.3) * (1 - self.cool)
+        lid = max(lid, xeyes)
 
         # rosy cheeks
         if M > 0.02:
@@ -1236,12 +1373,26 @@ class Blob:
                 cr.set_source_rgba(1.0, 0.3, 0.45, 0.6 * M)
                 cr.fill()
 
+        drawn_eyes = []
         for i, ((ex, ey, es), p) in enumerate(zip(eyes, self.pupils)):
             grow = 1 + 0.3 * C * (1 + 0.3 * math.sin(self.t * 20 + i * 2))
             ex_ = self.x + ex * r
             ey_ = face_y + ey * r
             er = r * 0.27 * es * grow
+            drawn_eyes.append((ex_, ey_, er))
             self.draw_eye(cr, ex_, ey_, er, p, lid, a, idx=i)
+            if xeyes > 0.02:
+                d = er * 0.6
+                cr.save()
+                cr.set_line_cap(cairo.LINE_CAP_ROUND)
+                cr.set_line_width(max(3, er * 0.22))
+                cr.set_source_rgba(0.1, 0, 0.1, xeyes)
+                cr.move_to(ex_ - d, ey_ - d)
+                cr.line_to(ex_ + d, ey_ + d)
+                cr.move_to(ex_ + d, ey_ - d)
+                cr.line_to(ex_ - d, ey_ + d)
+                cr.stroke()
+                cr.restore()
             if self.evil > 0.05:
                 self.draw_blood_tear(cr, ex_, ey_, er, r, i)
             if bliss > 0.5:
@@ -1261,6 +1412,8 @@ class Blob:
                           hue_eye=True, idx=2)
         if self.heavy > 0.15:
             self.draw_pentagram(cr, self.x, face_y - r * 0.7, r * 0.2)
+        elif self.wright > 0.01:
+            self.draw_mini_prism(cr, self.x, face_y - r * 0.68, r * 0.17)
 
         # mouth: opens with volume; small & lopsided when lazy, huge grin when crazy
         # mellow: a wide, gentle, mostly closed smile instead of the lazy "meh"
@@ -1312,6 +1465,12 @@ class Blob:
                 cr.fill()
         cr.restore()
 
+        if xeyes > 0.02:
+            self.draw_tongue(cr, self.x + mw * 0.3, my + mh * 0.5, r, xeyes)
+        if self.layne > 0.01 and self.cool < 0.99:
+            self.draw_round_glasses(cr, drawn_eyes, r, self.layne * (1 - self.cool))
+        if self.kurt > 0.01 and self.cool < 0.99:
+            self.draw_white_shades(cr, face_y, r, self.kurt * (1 - self.cool))
         if self.cool > 0.01:
             self.draw_cigarette(cr, self.x + mw * 0.75, my + mh * 0.3, r)
             self.draw_sunglasses(cr, face_y, r)
@@ -1409,6 +1568,328 @@ class Blob:
         cr.fill()
         cr.restore()
         self.ember = (tx + self.shake[0], ty + self.shake[1])
+
+    def draw_chain(self, cr, r):
+        """Easter egg (Layne Staley): a chain hung around the blob, padlock at the bottom.
+        It swings as the blob moves and jumps on the headbang."""
+        k = self.layne
+        swing = max(-1.0, min(1.0, -self.vx / 900)) * r * 0.25 + math.sin(self.sway) * r * 0.08
+        x0, y0 = self.x - r * 0.9, self.y + r * 0.3
+        x2, y2 = self.x + r * 0.9, self.y + r * 0.3
+        x1, y1 = self.x + swing * 2, self.y + r * (1.25 - 0.25 * self.nod)  # control point
+
+        def at(u):
+            v = 1 - u
+            return (v * v * x0 + 2 * v * u * x1 + u * u * x2,
+                    v * v * y0 + 2 * v * u * y1 + u * u * y2)
+
+        n = 15
+        lw = max(1.5, r * 0.035)
+        cr.save()
+        cr.set_line_width(lw)
+        for i in range(n):
+            u = (i + 0.5) / n
+            (ax, ay), (bx, by) = at(u - 0.5 / n), at(u + 0.5 / n)
+            cx, cy = (ax + bx) / 2, (ay + by) / 2
+            ang = math.atan2(by - ay, bx - ax)
+            ln = math.hypot(bx - ax, by - ay) * 0.75
+            cr.save()
+            cr.translate(cx, cy)
+            cr.rotate(ang)
+            if i % 2 == 0:
+                cr.scale(ln, ln * 0.55)            # flat link, seen from the front
+                cr.arc(0, 0, 1, 0, TAU)
+                cr.restore()
+            else:
+                cr.move_to(-ln, 0)                 # link turned edge-on
+                cr.line_to(ln, 0)
+                cr.restore()
+            cr.set_source_rgba(0.12, 0.12, 0.14, 0.9 * k)
+            cr.set_line_width(lw * 2.2)
+            cr.stroke_preserve()
+            cr.set_source_rgba(0.78, 0.8, 0.84, k)
+            cr.set_line_width(lw)
+            cr.stroke()
+        # padlock dangling from the lowest point
+        px, py = at(0.5)
+        s = r * 0.13
+        cr.translate(px, py + s * 0.4)
+        cr.rotate(0.15 * math.sin(self.t * 2.3) + swing / r * 0.6)
+        cr.arc_negative(0, s * 0.35, s * 0.42, 0, math.pi)          # shackle
+        cr.set_source_rgba(0.75, 0.77, 0.8, k)
+        cr.set_line_width(max(2, s * 0.22))
+        cr.stroke()
+        cr.rectangle(-s * 0.65, s * 0.35, s * 1.3, s)                # body
+        g = cairo.LinearGradient(-s, 0, s, s)
+        g.add_color_stop_rgba(0, 0.85, 0.72, 0.35, k)
+        g.add_color_stop_rgba(1, 0.5, 0.38, 0.12, k)
+        cr.set_source(g)
+        cr.fill_preserve()
+        cr.set_source_rgba(0.2, 0.15, 0.05, k)
+        cr.set_line_width(max(1.5, s * 0.1))
+        cr.stroke()
+        cr.arc(0, s * 0.75, s * 0.13, 0, TAU)                        # keyhole
+        cr.move_to(0, s * 0.75)
+        cr.line_to(0, s * 1.1)
+        cr.stroke()
+        cr.restore()
+
+    def draw_round_glasses(self, cr, eyes, r, k):
+        """Easter egg (Layne Staley): little round wire glasses with red lenses."""
+        cr.save()
+        cr.set_line_cap(cairo.LINE_CAP_ROUND)
+        lw = max(1.5, r * 0.035)
+        lens = [(x, y, er * 1.08) for x, y, er in eyes]
+        for x, y, lr in lens:
+            cr.arc(x, y, lr, 0, TAU)
+            cr.set_source_rgba(0.85, 0.05, 0.08, 0.45 * k)
+            cr.fill_preserve()
+            cr.set_source_rgba(0.15, 0.15, 0.17, k)
+            cr.set_line_width(lw)
+            cr.stroke()
+            # glint
+            cr.arc(x, y, lr * 0.7, math.pi * 1.1, math.pi * 1.45)
+            cr.set_source_rgba(1, 1, 1, 0.5 * k)
+            cr.set_line_width(lw * 1.2)
+            cr.stroke()
+        (x0, y0, r0), (x1, y1, r1) = lens
+        cr.set_source_rgba(0.15, 0.15, 0.17, k)
+        cr.set_line_width(lw)
+        cr.move_to(x0 + r0, y0 - r0 * 0.2)                           # bridge
+        cr.curve_to(x0 + r0 + r * 0.03, y0 - r0 * 0.5, x1 - r1 - r * 0.03, y1 - r1 * 0.5,
+                    x1 - r1, y1 - r1 * 0.2)
+        cr.move_to(x0 - r0, y0 - r0 * 0.2)                           # arms
+        cr.line_to(self.x - r * 0.93, y0 - r0 * 0.45)
+        cr.move_to(x1 + r1, y1 - r1 * 0.2)
+        cr.line_to(self.x + r * 0.93, y1 - r1 * 0.45)
+        cr.stroke()
+        cr.restore()
+
+    def draw_white_shades(self, cr, face_y, r, k):
+        """Easter egg (Kurt Cobain): big white oval sunglasses; pushed up onto the forehead
+        while the chorus is loud."""
+        up = self.grunge * self.grunge * (3 - 2 * self.grunge)       # smoothstep
+        y = lerp(face_y - r * 0.04, face_y - r * 0.78, up) - (1 - k) ** 2 * r * 1.2
+        rx, ry = r * 0.31, r * 0.24
+        cr.save()
+        cr.translate(self.x, y)
+        cr.rotate(-0.08 * up)                                         # a bit crooked up there
+        cr.set_line_join(cairo.LINE_JOIN_ROUND)
+        cr.set_line_cap(cairo.LINE_CAP_ROUND)
+        cr.set_source_rgba(0.96, 0.96, 0.94, k)
+        cr.set_line_width(max(2.5, r * 0.06))
+        cr.move_to(-r * 0.08, -ry * 0.3)                             # bridge
+        cr.curve_to(-r * 0.03, -ry * 0.6, r * 0.03, -ry * 0.6, r * 0.08, -ry * 0.3)
+        cr.move_to(-r * 0.36 - rx, -ry * 0.2)                        # arms
+        cr.line_to(-r * 0.92, -ry * 0.5)
+        cr.move_to(r * 0.36 + rx, -ry * 0.2)
+        cr.line_to(r * 0.92, -ry * 0.5)
+        cr.stroke()
+        for side in (-1, 1):
+            cx = side * r * 0.37
+            cr.save()
+            cr.translate(cx, 0)
+            cr.rotate(side * 0.12)                                   # cat-eye tilt
+            cr.scale(rx, ry)
+            cr.arc(0, 0, 1, 0, TAU)
+            cr.restore()
+            g = cairo.LinearGradient(cx, -ry, cx, ry)
+            g.add_color_stop_rgba(0, 0.2, 0.2, 0.24, k)
+            g.add_color_stop_rgba(1, 0.02, 0.02, 0.03, k)
+            cr.set_source(g)
+            cr.fill_preserve()
+            cr.set_source_rgba(0.98, 0.98, 0.96, k)                   # thick white frame
+            cr.set_line_width(max(3, r * 0.08))
+            cr.stroke_preserve()
+            cr.set_source_rgba(0.55, 0.55, 0.52, 0.6 * k)
+            cr.set_line_width(1)
+            cr.stroke()
+            cr.move_to(cx - rx * 0.55, -ry * 0.3)                     # glint
+            cr.line_to(cx - rx * 0.1, -ry * 0.45)
+            cr.line_to(cx - rx * 0.35, ry * 0.15)
+            cr.close_path()
+            cr.set_source_rgba(1, 1, 1, 0.3 * k)
+            cr.fill()
+        cr.restore()
+
+    def draw_tongue(self, cr, x, y, r, k):
+        """Easter egg (Kurt Cobain): tongue hanging out with the X eyes."""
+        w = r * 0.2
+        ln = r * 0.36 * k
+        wig = math.sin(self.t * 6) * w * 0.25
+        cr.save()
+        cr.move_to(x - w * 0.5, y)
+        cr.line_to(x - w * 0.5 + wig * 0.3, y + ln)
+        cr.arc_negative(x + wig * 0.3, y + ln, w * 0.5, math.pi, 0)
+        cr.line_to(x + w * 0.5, y)
+        cr.close_path()
+        cr.set_source_rgba(1.0, 0.42, 0.55, k)
+        cr.fill_preserve()
+        cr.set_source_rgba(0.45, 0.05, 0.15, 0.8 * k)
+        cr.set_line_width(max(1.5, r * 0.025))
+        cr.stroke()
+        cr.move_to(x, y + ln * 0.15)                                  # middle groove
+        cr.line_to(x + wig * 0.2, y + ln * 0.75)
+        cr.stroke()
+        cr.restore()
+
+    def draw_prism_light(self, cr, a, r):
+        """Easter egg (Richard Wright): a white beam enters the blob from the left and comes out
+        the right as a rainbow, each colour band brightening with its part of the spectrum.
+        Drawn before the body, so the blob itself is the prism."""
+        k = self.wright
+        cr.save()
+        # incoming white beam
+        bx0, by0 = self.x - r * 3.4, self.y + r * 0.55
+        bx1, by1 = self.x - r * 0.3, self.y - r * 0.05
+        g = cairo.LinearGradient(bx0, by0, bx1, by1)
+        g.add_color_stop_rgba(0, 1, 1, 1, 0)
+        g.add_color_stop_rgba(0.5, 1, 1, 1, 0.8 * k)
+        g.add_color_stop_rgba(1, 1, 1, 1, 0.9 * k)
+        cr.set_source(g)
+        cr.set_line_width(max(2, r * 0.05))
+        cr.set_line_cap(cairo.LINE_CAP_BUTT)
+        cr.move_to(bx0, by0)
+        cr.line_to(bx1, by1)
+        cr.stroke()
+        # outgoing rainbow, fanning out and fading
+        colors = ((1.0, 0.1, 0.1), (1.0, 0.55, 0.05), (1.0, 0.95, 0.1),
+                  (0.15, 0.85, 0.25), (0.15, 0.45, 1.0), (0.6, 0.2, 0.95))
+        ex, ey = self.x + r * 0.3, self.y + r * 0.0
+        fx, fy = self.x + r * 3.6, self.y + r * 0.55
+        w0, w1 = r * 0.035, r * 0.17
+        n = len(colors)
+        for i, c in enumerate(colors):
+            lvl = clamp01(a.spectrum[min(31, 2 + i * 5)])
+            al = k * (0.5 + 0.5 * lvl)
+            o0, o1 = (i - n / 2) * w0, (i - n / 2) * w1
+            cr.move_to(ex, ey + o0)
+            cr.line_to(fx, fy + o1)
+            cr.line_to(fx, fy + o1 + w1)
+            cr.line_to(ex, ey + o0 + w0)
+            cr.close_path()
+            g = cairo.LinearGradient(ex, ey, fx, fy)
+            g.add_color_stop_rgba(0, *c, al)
+            g.add_color_stop_rgba(0.7, *c, al * 0.7)
+            g.add_color_stop_rgba(1, *c, 0)
+            cr.set_source(g)
+            cr.fill()
+        cr.restore()
+
+    def draw_cactus_arms(self, cr, a, r):
+        """Easter egg (John Garcia): saguaro arms sprout from the sides and wave to the riff."""
+        k = self.desert
+        cr.save()
+        cr.set_line_cap(cairo.LINE_CAP_ROUND)
+        cr.set_line_join(cairo.LINE_JOIN_ROUND)
+        w = r * 0.24
+        for side, ph in ((-1, 0.0), (1, 1.7)):
+            wave = math.sin(self.sway + ph) * 0.5 + 0.5
+            out = r * 0.65 * k
+            up = r * (0.45 + 0.25 * wave + 0.2 * min(a.bass, 1.0)) * k
+            bx, by = self.x + side * r * 0.6, self.y + r * (0.25 - 0.1 * side)
+            ex = bx + side * out
+            cr.move_to(bx, by)
+            cr.line_to(ex - side * w * 0.5, by)
+            cr.curve_to(ex, by, ex, by, ex, by - w * 0.5)
+            cr.line_to(ex + side * wave * r * 0.06, by - up)
+            path = cr.copy_path()
+            cr.set_source_rgba(0.08, 0.25, 0.1, k)            # outline
+            cr.set_line_width(w + max(3, r * 0.05))
+            cr.stroke()
+            cr.append_path(path)
+            cr.set_source_rgba(0.25, 0.62, 0.28, k)           # flesh
+            cr.set_line_width(w)
+            cr.stroke()
+            cr.append_path(path)
+            cr.set_source_rgba(0.45, 0.8, 0.42, 0.7 * k)      # rib highlight
+            cr.set_line_width(max(1.5, w * 0.15))
+            cr.stroke()
+            # spines along the upright part
+            tx = ex + side * wave * r * 0.06
+            cr.set_source_rgba(1.0, 0.95, 0.75, k)
+            cr.set_line_width(max(1, r * 0.012))
+            for j in range(5):
+                u = (j + 0.5) / 5
+                sx, sy = lerp(ex, tx, u), lerp(by - w * 0.5, by - up, u)
+                for d in (-1, 1):
+                    cr.move_to(sx + d * w * 0.5, sy)
+                    cr.line_to(sx + d * w * 0.8, sy - w * 0.15)
+            cr.stroke()
+        cr.restore()
+
+    def draw_desert_sun(self, cr, W, H, a):
+        """Easter egg (John Garcia): a huge striped sunset behind everything, rippling in
+        the heat haze and swelling with the bass."""
+        k = self.desert
+        if k < 0.01:
+            return
+        R = min(W, H) * 0.3 * (1 + 0.06 * min(a.bass, 1.5))
+        cx, cy = W * 0.5, H * 0.62
+        top = (1.0, 0.92, 0.35)
+        mid = (1.0, 0.45, 0.12)
+        bot = (0.85, 0.1, 0.45)
+        # soft halo
+        g = cairo.RadialGradient(cx, cy, R * 0.8, cx, cy, R * 1.8)
+        g.add_color_stop_rgba(0, 1.0, 0.5, 0.15, 0.18 * k)
+        g.add_color_stop_rgba(1, 1.0, 0.3, 0.3, 0)
+        cr.set_source(g)
+        cr.arc(cx, cy, R * 1.8, 0, TAU)
+        cr.fill()
+        n = 40
+        h = 2 * R / n
+        scroll = (self.t * 0.25) % 1.0
+        for i in range(n):
+            y = cy - R + i * h
+            u = (i + 0.5) / n
+            # retro sunset cuts in the lower half, drifting down and widening
+            if u > 0.5:
+                band = ((u - 0.5) * 8 - scroll) % 1.0
+                if band < 0.15 + 0.5 * (u - 0.5):
+                    continue
+            dy = abs(y + h / 2 - cy)
+            half = math.sqrt(max(0.0, R * R - dy * dy))
+            shimmer = math.sin(y * 0.06 + self.t * 4) * R * 0.03 * u
+            c = (tuple(lerp(p, q, u * 2) for p, q in zip(top, mid)) if u < 0.5 else
+                 tuple(lerp(p, q, u * 2 - 1) for p, q in zip(mid, bot)))
+            cr.set_source_rgba(*c, 0.55 * k)
+            cr.rectangle(cx - half + shimmer, y, 2 * half, h + 0.5)
+            cr.fill()
+
+    def draw_mini_prism(self, cr, x, y, size):
+        """Easter egg (Richard Wright): a little glowing prism on the forehead."""
+        k = self.wright
+        pts = [(x + math.cos(-math.pi / 2 + j * TAU / 3) * size,
+                y + math.sin(-math.pi / 2 + j * TAU / 3) * size) for j in range(3)]
+        cr.save()
+        cr.set_line_join(cairo.LINE_JOIN_ROUND)
+        cr.set_line_cap(cairo.LINE_CAP_ROUND)
+        lw = max(1.2, size * 0.1)
+        # beam in
+        cr.move_to(x - size * 2.0, y + size * 0.45)
+        cr.line_to(x - size * 0.45, y + size * 0.05)
+        cr.set_source_rgba(1, 1, 1, 0.9 * k)
+        cr.set_line_width(lw)
+        cr.stroke()
+        # rainbow out
+        for i, c in enumerate(((1, 0.1, 0.1), (1, 0.6, 0.05), (1, 0.95, 0.1),
+                               (0.15, 0.85, 0.25), (0.2, 0.5, 1), (0.6, 0.2, 0.95))):
+            cr.move_to(x + size * 0.4, y + size * 0.1 + i * lw * 0.15)
+            cr.line_to(x + size * 2.0, y + size * 0.35 + i * lw * 0.95)
+            cr.set_source_rgba(*c, k)
+            cr.set_line_width(lw * 0.9)
+            cr.stroke()
+        # the prism itself
+        cr.move_to(*pts[0])
+        for p in pts[1:]:
+            cr.line_to(*p)
+        cr.close_path()
+        cr.set_source_rgba(0.05, 0.05, 0.08, 0.85 * k)
+        cr.fill_preserve()
+        cr.set_source_rgba(1, 1, 1, 0.95 * k)
+        cr.set_line_width(lw)
+        cr.stroke()
+        cr.restore()
 
     def draw_blood_tear(self, cr, x, y, er, r, idx):
         """A streak of blood running down from under the eye, a drop swelling at its end."""
@@ -1532,6 +2013,13 @@ class Blob:
         px = x + ox * (er - pr) * 0.95
         py = y + oy * (er - pr) * 0.95
         sp = self.spiral
+        if sp < 0.98 and self.desert > 0.02 and not hue_eye:
+            # desert trip: pulsing rainbow rings around the pupils
+            for j in range(4, 0, -1):
+                cr.arc(px, py, pr * (1 + 0.22 * j + 0.1 * math.sin(self.t * 5 - j)), 0, TAU)
+                cr.set_source_rgba(*hsv(self.t * 0.4 + j * 0.17 + idx * 0.3, 0.9, 1),
+                                   self.desert * (1 - sp))
+                cr.fill()
         if sp < 0.98:
             if ev > 0.05:
                 # glowing hot red pupils in the dark
@@ -1608,6 +2096,11 @@ class Blob:
             cr.arc(0, 0, s, 0, math.pi)
             cr.curve_to(-s, -s * 0.4, -s * 0.4, -s * 0.8, 0, -s * 1.8)
             cr.restore()
+            cr.fill()
+            return
+        if p.kind == "sand":
+            cr.set_source_rgba(*hsv(p.hue, 0.45, 0.95), 0.85 * min(1, f * 4, (1 - f) * 8))
+            cr.arc(p.x, p.y, p.size, 0, TAU)
             cr.fill()
             return
         if p.kind == "smoke":
@@ -1748,7 +2241,12 @@ class Overlay(Gtk.Window):
             # 2 substeps for stable bounces
             for _ in range(2):
                 self.blob.update(dt / 2, W, H, self.audio)
-        self.blob.cool_target = 1.0 if self.now_playing.lanegan else 0.0
+        np_ = self.now_playing
+        self.blob.cool_target = 1.0 if np_.lanegan else 0.0
+        self.blob.layne_target = 1.0 if np_.layne else 0.0
+        self.blob.wright_target = 1.0 if np_.wright else 0.0
+        self.blob.kurt_target = 1.0 if np_.kurt else 0.0
+        self.blob.desert_target = 1.0 if np_.garcia else 0.0
         self.queue_draw()
         return GLib.SOURCE_CONTINUE
 
@@ -1760,6 +2258,7 @@ class Overlay(Gtk.Window):
         cr.set_operator(cairo.OPERATOR_OVER)
         if self.show_vignette:
             self.draw_vignette(cr)
+        self.blob.draw_desert_sun(cr, self.get_allocated_width(), self.get_allocated_height(), self.audio)
         self.blob.draw_flash(cr)
         if self.show_scope:
             self.draw_scope(cr)

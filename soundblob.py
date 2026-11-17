@@ -675,6 +675,16 @@ def pearljam_on(artists, title, album=""):
     return _plays_on(artists, title, album, {"pearl jam", "eddie vedder"})
 
 
+def fnm_on(artists, title, album=""):
+    """Is this Faith No More?"""
+    return _plays_on(artists, title, album, {"faith no more"})
+
+
+def bungle_on(artists, title, album=""):
+    """Is this Mr. Bungle?"""
+    return _plays_on(artists, title, album, {"mr bungle"})
+
+
 def garcia_on(artists, title, album=""):
     """Is John Garcia singing on this track?"""
     if any("john garcia" in a.lower() for a in artists):
@@ -810,7 +820,9 @@ class NowPlaying:
     and flames for Light My Fire. The Melvins give it King Buzzo's giant grey fro and a robe
     printed with eyes, Queens of the Stone Age turn it into a clockwork wind-up toy, Marillion
     put it in a jester's hat with bells and harlequin face paint, and Pearl Jam dress it in
-    flannel with the ocean rolling in along the bottom of the screen."""
+    flannel with the ocean rolling in along the bottom of the screen. Faith No More leave a fish
+    flopping on the floor beside it and snap its colours around like Patton switching genres,
+    and Mr. Bungle give it a squishy clown nose, a party hat and carnival balloons."""
 
     BUS_NAME = "org.mpris.MediaPlayer2.spotify"
 
@@ -952,6 +964,14 @@ class NowPlaying:
     @property
     def pearljam(self):
         return self.playing and pearljam_on(self.artists, self.title, self.album)
+
+    @property
+    def fnm(self):
+        return self.playing and fnm_on(self.artists, self.title, self.album)
+
+    @property
+    def bungle(self):
+        return self.playing and bungle_on(self.artists, self.title, self.album)
 
     @property
     def garcia(self):
@@ -1120,6 +1140,13 @@ class Blob:
         self.jingle = 0.0          # 1 -> 0 after a hi-hat: the bells shake
         self.pearljam = 0.0        # easter egg: flannel shirt, ocean waves (Pearl Jam)
         self.pearljam_target = 0.0
+        self.fnm = 0.0             # easter egg: a fish flopping on the floor, colour whiplash (FNM)
+        self.fnm_target = 0.0
+        self.fish = [300.0, 0.0, 0.0, 0.0, 1]   # x, height off the floor, upward speed, spin, facing
+        self.floor = 600.0         # screen height, for things that live on the floor
+        self.bungle = 0.0          # easter egg: clown nose, party hat, balloons (Mr. Bungle)
+        self.bungle_target = 0.0
+        self.honk = 0.0            # 1 -> 0 after a snare: the clown nose squishes
         # The Cure's backcombed hair: (angle, length, kink) per strand, fixed so it doesn't flicker
         self.cure_hair = [(random.uniform(-math.pi - 0.35, 0.35), random.uniform(0.3, 0.75),
                            random.uniform(-0.6, 0.6)) for _ in range(46)]
@@ -1201,6 +1228,32 @@ class Blob:
         self.gear += (self.gear_want - self.gear) * min(1, dt * 25)      # snaps to each tick
         self.key_spin += dt * (0.6 + 4 * level)
         self.jingle = max(0.0, self.jingle - dt * 4)
+        self.fnm += (self.fnm_target - self.fnm) * min(1, dt * 1.2)
+        self.bungle += (self.bungle_target - self.bungle) * min(1, dt * 1.2)
+        self.honk = max(0.0, self.honk - dt * 5)
+        self.floor = H
+        if self.fnm > 0.01:
+            # the fish follows the blob around the floor, a little way behind, flopping
+            fish = self.fish
+            want = self.x - (1 if self.vx >= 0 else -1) * self.R * 1.8
+            want = min(max(want, 40), W - 40)
+            fish[0] += (want - fish[0]) * min(1, dt * 0.8)
+            fish[2] -= 1400 * dt
+            fish[1] += fish[2] * dt
+            if fish[1] <= 0:
+                fish[1], fish[2] = 0.0, 0.0
+                if random.random() < dt * 3:
+                    fish[2] = random.uniform(250, 480)    # flop!
+                    fish[4] = -fish[4]
+            fish[3] = fish[2] / 480 * 1.2 * fish[4]
+        if self.bungle > 0.3 and random.random() < dt * 0.9 * self.bungle \
+                and len(self.particles) < self.max_particles:
+            # carnival balloons drift up past it
+            self.particles.append(Particle(
+                self.x + random.uniform(-1.5, 1.5) * self.R, self.y + self.R * random.uniform(0.5, 1.2),
+                random.uniform(-15, 15), random.uniform(-90, -55), random.uniform(5, 8),
+                random.choice((0.0, 0.14, 0.33, 0.58, 0.8)), self.R * random.uniform(0.16, 0.22),
+                "balloon"))
         if self.storm > 0.5 and random.random() < dt / 7:
             # lightning: a jagged bolt from the top of the screen, every few seconds
             x, self.bolt = random.uniform(0.1, 0.9), []
@@ -1523,6 +1576,9 @@ class Blob:
             elif p.kind == "flame":
                 p.vx += math.sin(self.t * 9 + p.rot) * 120 * dt   # flickers as it rises
                 p.vy -= 60 * dt
+            elif p.kind == "balloon":
+                p.vx += math.sin(self.t * 1.3 + p.rot) * 25 * dt   # bobs on the air
+                p.rot -= dt * 5.5                                  # (slow sway, not a spin)
             elif p.kind == "moth":
                 # flutters about in loops, no gravity, slowing after a scatter
                 p.vx += math.sin(self.t * 2.3 + p.rot) * 140 * dt
@@ -1582,6 +1638,9 @@ class Blob:
             self.glitch = 1.0
         if self.rage > 0.5 and self.grunge > 0.4 and self.kill <= 0 and random.random() < 0.25:
             self.kill = 0.35       # Morello's kill-switch stutter
+        self.honk = 1.0            # Mr. Bungle: the clown nose squishes
+        if self.fnm > 0.5 and self.grunge > 0.3 and random.random() < 0.3:
+            self.hue = random.random()     # Faith No More: genre whiplash
         if self.acid > 0.5 and self.grunge > 0.4:
             # the sludge hits: butterflies burst off the blob (Scream of the Butterfly)
             for _ in range(3):
@@ -1795,7 +1854,7 @@ class Blob:
 
         # particles behind (smoke rises in front of the face, drawn last)
         for p in self.particles:
-            if p.kind not in ("smoke", "fog", "fly", "flame"):
+            if p.kind not in ("smoke", "fog", "fly", "flame", "balloon"):
                 self.draw_particle(cr, p)
 
         if self.nin > 0.3 and self.glitch > 0.05:
@@ -1804,8 +1863,10 @@ class Blob:
             self.draw_body(cr, a, r, sat)
         if self.korn > 0.01:
             self.draw_leash(cr, r)
+        if self.fnm > 0.01:
+            self.draw_fish(cr, r)
         for p in self.particles:
-            if p.kind in ("smoke", "fly", "flame"):
+            if p.kind in ("smoke", "fly", "flame", "balloon"):
                 self.draw_particle(cr, p)
 
     def draw_body(self, cr, a, r, sat):
@@ -3158,6 +3219,119 @@ class Blob:
             cr.stroke()
         cr.restore()
 
+    def draw_fish(self, cr, r):
+        """Easter egg (Faith No More): a fish flopping about on the floor near the blob,
+        gasping (the end of the Epic video)."""
+        k = self.fnm
+        fx, h, _, spin, face = self.fish
+        L = r * 0.55
+        fy = self.floor - L * 0.25 - h
+        cr.save()
+        cr.translate(fx, fy)
+        cr.rotate(spin)
+        cr.scale(face, 1)
+        # tail, flapping
+        flap = math.sin(self.t * 14) * L * 0.12
+        cr.move_to(-L * 0.45, 0)
+        cr.line_to(-L * 0.85, -L * 0.28 + flap)
+        cr.line_to(-L * 0.78, flap * 0.5)
+        cr.line_to(-L * 0.85, L * 0.28 + flap)
+        cr.close_path()
+        cr.set_source_rgba(0.35, 0.5, 0.6, k)
+        cr.fill()
+        # body
+        cr.save()
+        cr.scale(L * 0.55, L * 0.25)
+        cr.arc(0, 0, 1, 0, TAU)
+        cr.restore()
+        g = cairo.LinearGradient(0, -L * 0.25, 0, L * 0.25)
+        g.add_color_stop_rgba(0, 0.45, 0.6, 0.72, k)
+        g.add_color_stop_rgba(0.6, 0.82, 0.88, 0.92, k)
+        g.add_color_stop_rgba(1, 0.95, 0.95, 0.93, k)
+        cr.set_source(g)
+        cr.fill_preserve()
+        cr.set_source_rgba(0.15, 0.25, 0.3, k)
+        cr.set_line_width(max(1, r * 0.015))
+        cr.stroke()
+        # gill and fin
+        cr.arc(L * 0.22, 0, L * 0.12, -1.2, 1.2)
+        cr.stroke()
+        cr.move_to(-L * 0.05, -L * 0.22)
+        cr.line_to(-L * 0.2, -L * 0.36)
+        cr.line_to(-L * 0.3, -L * 0.2)
+        cr.set_source_rgba(0.35, 0.5, 0.6, k)
+        cr.fill()
+        # eye and gasping mouth
+        cr.arc(L * 0.38, -L * 0.06, L * 0.06, 0, TAU)
+        cr.set_source_rgba(1, 1, 1, k)
+        cr.fill()
+        cr.arc(L * 0.39, -L * 0.06, L * 0.03, 0, TAU)
+        cr.set_source_rgba(0, 0, 0, k)
+        cr.fill()
+        gasp = 0.5 + 0.5 * math.sin(self.t * 6)
+        cr.save()
+        cr.translate(L * 0.53, L * 0.06)
+        cr.scale(1, 0.4 + 0.6 * gasp)
+        cr.arc(0, 0, L * 0.05, 0, TAU)
+        cr.restore()
+        cr.set_source_rgba(0.3, 0.05, 0.1, k)
+        cr.fill()
+        cr.restore()
+
+    def draw_clown_nose(self, cr, face_y, r):
+        """Easter egg (Mr. Bungle): a shiny red clown nose that squishes flat on the snare."""
+        k = self.bungle
+        nx, ny = self.x - r * 0.01, face_y + r * 0.2
+        sq = self.honk
+        cr.save()
+        cr.translate(nx, ny)
+        cr.scale(1 + 0.35 * sq, 1 - 0.3 * sq)
+        g = cairo.RadialGradient(-r * 0.04, -r * 0.04, 0, 0, 0, r * 0.13)
+        g.add_color_stop_rgba(0, 1.0, 0.55, 0.5, k)
+        g.add_color_stop_rgba(0.4, 0.9, 0.05, 0.08, k)
+        g.add_color_stop_rgba(1, 0.55, 0.0, 0.03, k)
+        cr.set_source(g)
+        cr.arc(0, 0, r * 0.13, 0, TAU)
+        cr.fill()
+        cr.restore()
+
+    def draw_party_hat(self, cr, r):
+        """Easter egg (Mr. Bungle): a little striped party hat, cocked to one side, with a
+        pompom that bobs."""
+        k = self.bungle
+        cr.save()
+        cr.translate(self.x + r * 0.35, self.y - r * 0.74 - self.squash * r * 0.25)
+        cr.rotate(0.35 + max(-0.3, min(0.3, -self.vx / 3000)))
+        w, h = r * 0.3, r * 0.75
+        cr.move_to(-w, 0)
+        cr.line_to(0, -h)
+        cr.line_to(w, 0)
+        cr.close_path()
+        path = cr.copy_path()
+        cr.set_source_rgba(0.98, 0.9, 0.2, k)
+        cr.fill()
+        cr.append_path(path)
+        cr.clip()
+        cr.set_source_rgba(0.6, 0.15, 0.75, k)                  # diagonal stripes
+        for i in range(-4, 6):
+            y0 = -i * h * 0.22
+            cr.move_to(-w * 2, y0)
+            cr.line_to(w * 2, y0 - h * 0.35)
+            cr.line_to(w * 2, y0 - h * 0.25)
+            cr.line_to(-w * 2, y0 + h * 0.1)
+            cr.close_path()
+        cr.fill()
+        cr.reset_clip()
+        cr.append_path(path)
+        cr.set_source_rgba(0.2, 0.05, 0.25, k)
+        cr.set_line_width(max(1.2, r * 0.02))
+        cr.stroke()
+        bob = math.sin(self.t * 5) * r * 0.03 + self.honk * r * 0.05
+        cr.arc(bob, -h - r * 0.03, r * 0.08, 0, TAU)              # pompom
+        cr.set_source_rgba(1, 1, 1, k)
+        cr.fill()
+        cr.restore()
+
     def draw_flash(self, cr):
         """Full-screen colour flash on a drop."""
         if self.flash > 0.01:
@@ -3277,7 +3451,7 @@ class Blob:
             self.draw_eye(cr, self.x, face_y - r * 0.5, r * 0.16 * s, self.pupils[0], 0, a,
                           hue_eye=True, idx=2)
         if (self.heavy > 0.15 and self.tool < 0.5 and self.rage < 0.5 and self.nola < 0.5
-                and self.marillion < 0.5):
+                and self.marillion < 0.5 and self.bungle < 0.5):
             self.draw_pentagram(cr, self.x, face_y - r * 0.7, r * 0.2)
         elif self.nola > 0.01:
             self.draw_fleur_de_lis(cr, self.x, face_y - r * 0.7, r * 0.22)
@@ -3352,7 +3526,7 @@ class Blob:
         bare = 1 - max(self.korn, self.linkin, self.tool, self.horns, self.wright,
                        self.kurt * self.grunge, self.evil, self.rage, self.acid, self.nola,
                        self.interpol, self.cure, self.wizard, self.doors, self.melvins,
-                       self.marillion)
+                       self.marillion, self.bungle)
         if self.era90 * bare > 0.01:
             self.draw_cap(cr, face_y, r, self.era90 * bare)
         if self.y2k * bare > 0.01:
@@ -3369,6 +3543,9 @@ class Blob:
             self.draw_curls(cr, r)
         if self.marillion > 0.01:
             self.draw_jester_hat(cr, r)
+        if self.bungle > 0.01:
+            self.draw_clown_nose(cr, face_y, r)
+            self.draw_party_hat(cr, r)
         if self.layne > 0.01 and self.cool < 0.99:
             self.draw_round_glasses(cr, drawn_eyes, r, self.layne * (1 - self.cool))
         if self.kurt > 0.01 and self.cool < 0.99:
@@ -4218,6 +4395,34 @@ class Blob:
             cr.set_source_rgba(*hsv(p.hue * f, 0.9, 1), min(1, f * 1.6))
             cr.fill()
             return
+        if p.kind == "balloon":
+            al = min(1, f * 3, (1 - f) * 6)
+            s = p.size
+            sway = math.sin(p.rot) * 0.15
+            cr.save()
+            cr.translate(p.x, p.y)
+            cr.rotate(sway)
+            cr.move_to(0, s * 1.15)                               # the string
+            cr.curve_to(s * 0.3, s * 1.8, -s * 0.3, s * 2.4, s * 0.1, s * 3.2)
+            cr.set_source_rgba(0.3, 0.3, 0.3, 0.7 * al)
+            cr.set_line_width(1)
+            cr.stroke()
+            cr.save()
+            cr.scale(1, 1.18)
+            cr.arc(0, 0, s, 0, TAU)
+            cr.restore()
+            cr.set_source_rgba(*hsv(p.hue, 0.85, 0.95), 0.92 * al)
+            cr.fill()
+            cr.move_to(-s * 0.15, s * 1.12)                       # the knot
+            cr.line_to(s * 0.15, s * 1.12)
+            cr.line_to(0, s * 1.3)
+            cr.close_path()
+            cr.fill()
+            cr.arc(-s * 0.35, -s * 0.45, s * 0.2, 0, TAU)         # shine
+            cr.set_source_rgba(1, 1, 1, 0.5 * al)
+            cr.fill()
+            cr.restore()
+            return
         if p.kind == "sand":
             cr.set_source_rgba(*hsv(p.hue, 0.45, 0.95), 0.85 * min(1, f * 4, (1 - f) * 8))
             cr.arc(p.x, p.y, p.size, 0, TAU)
@@ -4392,6 +4597,8 @@ class Overlay(Gtk.Window):
         self.blob.qotsa_target = 1.0 if np_.qotsa else 0.0
         self.blob.marillion_target = 1.0 if np_.marillion else 0.0
         self.blob.pearljam_target = 1.0 if np_.pearljam else 0.0
+        self.blob.fnm_target = 1.0 if np_.fnm else 0.0
+        self.blob.bungle_target = 1.0 if np_.bungle else 0.0
         self.queue_draw()
         return GLib.SOURCE_CONTINUE
 

@@ -612,6 +612,13 @@ def rage_on(artists, title, album=""):
         "rage against the machine", "zack de la rocha", "one day as a lion", "prophets of rage"})
 
 
+def acid_bath_on(artists, title, album=""):
+    """Is this Acid Bath (or Dax Riggs's later bands, or Shrüm before it)?"""
+    return _plays_on(artists, title, album, {
+        "acid bath", "dax riggs", "agents of oblivion", "deadboy the elephantmen",
+        "deadboy and the elephantmen", "shrüm", "shrum"})
+
+
 def garcia_on(artists, title, album=""):
     """Is John Garcia singing on this track?"""
     if any("john garcia" in a.lower() for a in artists):
@@ -732,7 +739,9 @@ class NowPlaying:
     tripping through the desert. Tool opens its third eye inside a spinning fractal mandala, Korn
     gives it dreadlocks and a spiked collar on a leash, Nine Inch Nails glitches it, and Linkin
     Park puts on headphones, sprays graffiti paint and screams the choruses. Rage Against the
-    Machine masks it with a bandana under a red star and kill-switch stutters it."""
+    Machine masks it with a bandana under a red star and kill-switch stutters it. Acid Bath
+    drags it through the bayou: swamp-green, melting and dripping acid, draped in Spanish moss,
+    bubbling inside, with black butterflies fluttering around that scatter when it gets loud."""
 
     BUS_NAME = "org.mpris.MediaPlayer2.spotify"
 
@@ -819,6 +828,10 @@ class NowPlaying:
     @property
     def rage(self):
         return self.playing and rage_on(self.artists, self.title, self.album)
+
+    @property
+    def acid_bath(self):
+        return self.playing and acid_bath_on(self.artists, self.title, self.album)
 
     @property
     def garcia(self):
@@ -946,6 +959,8 @@ class Blob:
         self.rage = 0.0            # easter egg: bandana, red star, red & black, kill switch (RATM)
         self.rage_target = 0.0
         self.kill = 0.0            # seconds of kill-switch stutter left
+        self.acid = 0.0            # easter egg: swamp green, melting, moss, butterflies (Acid Bath)
+        self.acid_target = 0.0
         # era awareness (release year from MusicBrainz): the 90s and the early 2000s
         self.era90 = 0.0           # backwards cap, Memphis-pattern confetti, VHS camcorder overlay
         self.era90_target = 0.0
@@ -1006,6 +1021,7 @@ class Blob:
         self.linkin += (self.linkin_target - self.linkin) * min(1, dt * 1.5)
         self.rage += (self.rage_target - self.rage) * min(1, dt * 1.5)
         self.kill = max(0.0, self.kill - dt)
+        self.acid += (self.acid_target - self.acid) * min(1, dt * 1.2)
         self.era90 += (self.era90_target - self.era90) * min(1, dt * 1.5)
         self.y2k += (self.y2k_target - self.y2k) * min(1, dt * 1.5)
         self.scream = self.linkin * clamp01((self.grunge - 0.45) / 0.4)
@@ -1028,6 +1044,21 @@ class Blob:
             self.particles.append(Particle(
                 ex, ey, random.uniform(-8, 12), random.uniform(-55, -35),
                 random.uniform(1.6, 2.6), 0.0, random.uniform(2, 4), "smoke"))
+        if self.acid > 0.3:
+            r0 = self.R
+            # the melting bottom drips acid
+            if random.random() < dt * (1.5 + 5 * level) * self.acid and len(self.particles) < self.max_particles:
+                self.particles.append(Particle(
+                    self.x + random.uniform(-0.6, 0.6) * r0, self.y + r0 * 0.95,
+                    self.vx * 0.2, random.uniform(0, 40), random.uniform(0.8, 1.3), 0.3,
+                    random.uniform(2.5, 4.5), "acid"))
+            # and a few black butterflies keep it company
+            if random.random() < dt * 0.6 * self.acid:
+                ang = random.uniform(0, TAU)
+                self.emit(Particle(
+                    self.x + math.cos(ang) * r0 * 1.3, self.y + math.sin(ang) * r0 * 1.3,
+                    math.cos(ang) * 40, math.sin(ang) * 40 - 30, random.uniform(3.5, 5.5), 0.08,
+                    random.uniform(9, 14), "moth"))
         mel = 0.0 if quiet_level(level) else a.mellow
         self.mellow += (mel - self.mellow) * min(1, dt * 1.2)
         M = self.mellow
@@ -1189,6 +1220,10 @@ class Blob:
             # RATM: red (and, through dark(), black)
             want = 0.99 + 0.02 * math.sin(self.t * 0.7)
             self.hue += (((want - self.hue) + 0.5) % 1.0 - 0.5) * self.rage * min(1, dt * 3)
+        if self.acid > 0.01:
+            # Acid Bath: sickly swamp green, drifting toward murky olive
+            want = 0.28 + 0.04 * math.sin(self.t * 0.5)
+            self.hue += (((want - self.hue) + 0.5) % 1.0 - 0.5) * self.acid * min(1, dt * 3)
         if self.tool > 0.01:
             # Tool: deep indigo and violet, the colours of the visionary art
             want = 0.72 + 0.06 * math.sin(self.t * 0.4)
@@ -1235,6 +1270,13 @@ class Blob:
             elif p.kind == "smoke":
                 p.vx += math.sin(self.t * 1.5 + p.rot) * 30 * dt   # curls as it rises
                 p.size += dt * 9
+            elif p.kind == "moth":
+                # flutters about in loops, no gravity, slowing after a scatter
+                p.vx += math.sin(self.t * 2.3 + p.rot) * 140 * dt
+                p.vy += math.cos(self.t * 1.9 + p.rot * 1.3) * 140 * dt - 10 * dt
+                p.vx *= max(0.0, 1 - 1.2 * dt)
+                p.vy *= max(0.0, 1 - 1.2 * dt)
+                p.rot += dt * 2       # (plus the 6 below: wingbeats are drawn from rot)
             elif p.kind != "ring":
                 p.vy += 500 * dt
             p.x += p.vx * dt
@@ -1244,7 +1286,7 @@ class Blob:
 
     def dark(self, rgb, k=0.85):
         """Fade a colour toward DARK as the music gets heavy."""
-        t = max(self.heavy, 0.5 * self.nin, 0.3 * self.rage) * k   # NIN: steel; RATM: red & black
+        t = max(self.heavy, 0.5 * self.nin, 0.3 * self.rage, 0.35 * self.acid) * k   # egg palettes
         return tuple(c + (d - c) * t for c, d in zip(rgb, DARK))
 
     def emit(self, p):
@@ -1283,6 +1325,15 @@ class Blob:
             self.glitch = 1.0
         if self.rage > 0.5 and self.grunge > 0.4 and self.kill <= 0 and random.random() < 0.25:
             self.kill = 0.35       # Morello's kill-switch stutter
+        if self.acid > 0.5 and self.grunge > 0.4:
+            # the sludge hits: butterflies burst off the blob (Scream of the Butterfly)
+            for _ in range(3):
+                ang = random.uniform(0, TAU)
+                sp = random.uniform(250, 450)
+                self.emit(Particle(
+                    self.x + math.cos(ang) * self.R, self.y + math.sin(ang) * self.R,
+                    math.cos(ang) * sp, math.sin(ang) * sp, random.uniform(2.5, 4.0), 0.08,
+                    random.uniform(9, 14), "moth"))
         self.nod = min(1.0, 0.5 + 0.25 * s)
         self.squash_v += 1.5 + s * (0.5 + self.horns)
         self.squash_ang = -math.pi / 2
@@ -1509,6 +1560,15 @@ class Blob:
             pts = [(px + math.sin(py * 0.045 + t * 4.5) * r * 0.06 * d,
                     py + math.sin(px * 0.03 - t * 2.0) * r * 0.025 * d) for px, py in pts]
             self.draw_cactus_arms(cr, a, r)
+        if self.acid > 0.01:
+            # Acid Bath: the bottom half melts into slow, sagging drips
+            k, t = self.acid, self.t
+            out = []
+            for i, (px, py) in enumerate(pts):
+                th = i / self.N * TAU
+                down = max(0.0, math.sin(th)) ** 2
+                out.append((px, py + r * 0.22 * k * down * (0.5 + 0.5 * math.sin(th * 7 + t * 1.5))))
+            pts = out
         if self.wright > 0.01:
             self.draw_prism_light(cr, a, r)
 
@@ -1519,7 +1579,7 @@ class Blob:
             cr.scale(k, k)
             cr.translate(-self.x, -self.y)
             smooth_closed_path(cr, pts)
-            glow = hsv(self.hue + 0.5 * (1 - max(self.desert, self.tool, self.rage)), sat)  # eggs: on-palette
+            glow = hsv(self.hue + 0.5 * (1 - max(self.desert, self.tool, self.rage, self.acid)), sat)  # eggs: on-palette
             glow = tuple(lerp(c, d, self.heavy) for c, d in zip(glow, (0.75, 0.0, 0.05)))
             cr.set_source_rgba(*glow, al + a.level * 0.08 + self.crazy * 0.08)
             cr.fill()
@@ -1545,10 +1605,12 @@ class Blob:
             ang = self.spin * (1 if j % 2 else -0.7) + j * TAU / 6 + math.sin(at + j) * 0.5
             dist = r * (0.35 + 0.25 * math.sin(at * 1.3 + j * 2))
             sr = r * (0.18 + 0.12 * a.spectrum[(j * 5) % 32])
-            spot = (0.25 + j * 0.13) * (1 - 0.8 * max(self.desert, self.tool, self.rage))  # egg's hues
+            spot = (0.25 + j * 0.13) * (1 - 0.8 * max(self.desert, self.tool, self.rage, self.acid))  # egg's hues
             cr.set_source_rgba(*self.dark(hsv(self.hue + spot, 0.9 * sat, 1), 0.9), 0.55)
             cr.arc(self.x + math.cos(ang) * dist, self.y + math.sin(ang) * dist, sr, 0, TAU)
             cr.fill()
+        if self.acid > 0.01:
+            self.draw_acid_bubbles(cr, a, r)
         if self.nin > 0.01:
             self.draw_scanlines(cr, r)
         cr.restore()
@@ -1585,7 +1647,11 @@ class Blob:
             self.draw_chain(cr, r)
         if self.korn > 0.01:
             self.draw_collar(cr, r)
+        if self.acid > 0.01:
+            self.draw_moss(cr, r, strands=False)   # the clump sits behind the forehead
         self.draw_face(cr, a, r)
+        if self.acid > 0.01:
+            self.draw_moss(cr, r, clump=False)     # strands hang down over the sides
         if self.korn > 0.01:
             self.draw_dreads(cr, r)
         cr.restore()
@@ -1969,6 +2035,60 @@ class Blob:
         cr.fill()
         cr.restore()
 
+    def draw_acid_bubbles(self, cr, a, r):
+        """Easter egg (Acid Bath): bubbles rising through the body, faster when it's loud.
+        Called with the body as the clip."""
+        k = self.acid
+        cr.set_line_width(max(1.2, r * 0.02))
+        for j in range(9):
+            ph = (self.t * (0.25 + 0.05 * (j % 3)) * (1 + a.level) + j / 9) % 1
+            bx = self.x + math.sin(j * 2.4 + self.t * 1.3) * r * 0.65 * (1 - 0.3 * ph)
+            by = self.y + r * 1.05 - ph * r * 2.0
+            br = r * (0.04 + 0.03 * ((j * 7) % 4) / 3) * (0.6 + 0.6 * ph)
+            al = k * min(1, ph * 6, (1 - ph) * 6)
+            cr.new_sub_path()
+            cr.arc(bx, by, br, 0, TAU)
+            cr.set_source_rgba(0.75, 1.0, 0.45, 0.25 * al)
+            cr.fill_preserve()
+            cr.set_source_rgba(0.85, 1.0, 0.6, 0.7 * al)
+            cr.stroke()
+
+    def draw_moss(self, cr, r, clump=True, strands=True):
+        """Easter egg (Acid Bath): Spanish moss draped over the crown, hanging down the sides
+        and swinging with the motion."""
+        k = self.acid
+        swing = max(-1.0, min(1.0, -self.vx / 900)) * r * 0.12
+        cr.save()
+        cr.set_line_cap(cairo.LINE_CAP_ROUND)
+        # the clump on top
+        cr.set_source_rgba(0.42, 0.47, 0.36, 0.95 * k * clump)
+        for j in range(11):
+            ang = -math.pi / 2 + (j - 5) * 0.2
+            cr.new_sub_path()
+            cr.arc(self.x + math.cos(ang) * r * 0.93, self.y + math.sin(ang) * r * 0.93,
+                   r * (0.1 + 0.03 * (j % 3)), 0, TAU)
+        cr.fill()
+        # strands hanging off both sides of the crown, clear of the eyes
+        for j in range(14 * strands):
+            side = -1 if j < 7 else 1
+            u = (j % 7) / 6
+            ang = -math.pi / 2 + side * (0.85 + u * 0.6)
+            x0 = self.x + math.cos(ang) * r * 0.92
+            y0 = self.y + math.sin(ang) * r * 0.92
+            ln = r * (0.35 + 0.25 * ((j * 5) % 3) / 2 + 0.15 * u)
+            sw = swing * (0.6 + u) + math.sin(self.t * 1.7 + j) * r * 0.025
+            cr.move_to(x0, y0)
+            steps = 6
+            for s in range(1, steps + 1):
+                f = s / steps
+                cr.line_to(x0 + side * r * 0.04 * f + sw * f * f + math.sin(f * 9 + j) * r * 0.025,
+                           y0 + ln * f)
+            g = 0.36 + 0.06 * (j % 3)
+            cr.set_source_rgba(g, g + 0.06, g - 0.05, 0.9 * k)
+            cr.set_line_width(max(1.5, r * (0.035 - 0.01 * (j % 2))))
+            cr.stroke()
+        cr.restore()
+
     def draw_flash(self, cr):
         """Full-screen colour flash on a drop."""
         if self.flash > 0.01:
@@ -2143,7 +2263,7 @@ class Blob:
             self.draw_headphones(cr, face_y, r)
         # era headwear, unless an easter egg already has something on (or growing out of) the head
         bare = 1 - max(self.korn, self.linkin, self.tool, self.horns, self.wright,
-                       self.kurt * self.grunge, self.evil, self.rage)
+                       self.kurt * self.grunge, self.evil, self.rage, self.acid)
         if self.era90 * bare > 0.01:
             self.draw_cap(cr, face_y, r, self.era90 * bare)
         if self.y2k * bare > 0.01:
@@ -2912,6 +3032,57 @@ class Blob:
                 cr.arc(p.x, p.y + drip, s * 0.3, 0, TAU)
             cr.fill()
             return
+        if p.kind == "acid":
+            # glowing green drop, stretched by its fall speed
+            al = min(1, f * 2)
+            s = p.size
+            stretch = 1 + min(p.vy / 500, 1.8)
+            cr.save()
+            cr.translate(p.x, p.y)
+            cr.scale(1, stretch)
+            cr.arc(0, 0, s * 1.8, 0, TAU)
+            cr.set_source_rgba(0.55, 1.0, 0.1, 0.18 * al)
+            cr.fill()
+            cr.move_to(0, -s * 1.8)
+            cr.curve_to(s * 0.4, -s * 0.8, s, -s * 0.4, s, 0)
+            cr.arc(0, 0, s, 0, math.pi)
+            cr.curve_to(-s, -s * 0.4, -s * 0.4, -s * 0.8, 0, -s * 1.8)
+            cr.set_source_rgba(0.62, 1.0, 0.15, al)
+            cr.fill()
+            cr.restore()
+            return
+        if p.kind == "moth":
+            # black butterfly, wings beating (seen edge-on at the bottom of each stroke)
+            al = min(1, f * 3, (1 - f) * 6)
+            s = p.size
+            beat = 0.25 + 0.75 * abs(math.sin(p.rot * 3))
+            cr.save()
+            cr.translate(p.x, p.y)
+            cr.rotate(math.atan2(p.vy, p.vx) * 0.25 + 0.3 * math.sin(p.rot))
+            for side in (-1, 1):
+                cr.save()
+                cr.scale(side * beat, 1)
+                cr.move_to(0, 0)
+                cr.curve_to(s * 0.6, -s * 1.6, s * 1.9, -s * 1.3, s * 1.4, -s * 0.1)   # forewing
+                cr.curve_to(s * 1.6, s * 0.6, s * 0.9, s * 1.3, 0, s * 0.3)            # hindwing
+                cr.close_path()
+                cr.set_source_rgba(0.05, 0.04, 0.05, 0.95 * al)
+                cr.fill_preserve()
+                cr.set_source_rgba(0.75, 0.55, 0.3, 0.6 * al)                          # pale edge
+                cr.set_line_width(max(0.8, s * 0.1))
+                cr.stroke()
+                cr.arc(s * 1.05, -s * 0.75, s * 0.18, 0, TAU)                          # eyespot
+                cr.set_source_rgba(0.85, 0.75, 0.55, 0.8 * al)
+                cr.fill()
+                cr.restore()
+            cr.set_source_rgba(0.02, 0.02, 0.02, al)
+            cr.save()
+            cr.scale(0.3, 1)
+            cr.arc(0, s * 0.1, s * 0.6, 0, TAU)
+            cr.restore()
+            cr.fill()
+            cr.restore()
+            return
         if p.kind == "sand":
             cr.set_source_rgba(*hsv(p.hue, 0.45, 0.95), 0.85 * min(1, f * 4, (1 - f) * 8))
             cr.arc(p.x, p.y, p.size, 0, TAU)
@@ -3071,6 +3242,7 @@ class Overlay(Gtk.Window):
         self.blob.era90_target = 1.0 if 1990 <= year <= 1999 else 0.0
         self.blob.y2k_target = 1.0 if 2000 <= year <= 2004 else 0.0
         self.blob.rage_target = 1.0 if np_.rage else 0.0
+        self.blob.acid_target = 1.0 if np_.acid_bath else 0.0
         self.queue_draw()
         return GLib.SOURCE_CONTINUE
 

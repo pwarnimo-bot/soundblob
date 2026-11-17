@@ -639,6 +639,21 @@ def angels_on(artists, title, album=""):
     return _plays_on(artists, title, album, {"the black angels", "black angels"})
 
 
+def ehg_on(artists, title, album=""):
+    """Is this EyeHateGod?"""
+    return _plays_on(artists, title, album, {"eyehategod", "eye hate god"})
+
+
+def wizard_on(artists, title, album=""):
+    """Is this Electric Wizard?"""
+    return _plays_on(artists, title, album, {"electric wizard"})
+
+
+def doors_on(artists, title, album=""):
+    """Is this The Doors?"""
+    return _plays_on(artists, title, album, {"the doors", "doors"})
+
+
 def garcia_on(artists, title, album=""):
     """Is John Garcia singing on this track?"""
     if any("john garcia" in a.lower() for a in artists):
@@ -767,7 +782,11 @@ class NowPlaying:
     dresses it in a sharp black suit and tie with slicked hair, dark red and composed, and The
     Cure turns it pale with a huge backcombed tangle of black hair, running eyeliner and smeared
     red lipstick. The Black Angels give it black feathered wings that beat in time, hypnotic
-    op-art rings inside, and a 60s liquid light show behind it."""
+    op-art rings inside, and a 60s liquid light show behind it. EyeHateGod wraps it in barbed
+    wire, grimes it up and sets flies buzzing round it; Electric Wizard hoods it in purple, makes
+    its eyes glow green and slows it to a floaty doom crawl through low purple fog; and The Doors
+    give it Morrison's curls and a bead necklace, with a thunderstorm for Riders on the Storm
+    and flames for Light My Fire."""
 
     BUS_NAME = "org.mpris.MediaPlayer2.spotify"
 
@@ -874,6 +893,25 @@ class NowPlaying:
     @property
     def angels(self):
         return self.playing and angels_on(self.artists, self.title, self.album)
+
+    @property
+    def ehg(self):
+        return self.playing and ehg_on(self.artists, self.title, self.album)
+
+    @property
+    def wizard(self):
+        return self.playing and wizard_on(self.artists, self.title, self.album)
+
+    @property
+    def doors(self):
+        return self.playing and doors_on(self.artists, self.title, self.album)
+
+    @property
+    def doors_song(self):
+        """'storm' for Riders on the Storm, 'fire' for Light My Fire, else None."""
+        if not self.doors:
+            return None
+        return {"riders on the storm": "storm", "light my fire": "fire"}.get(_norm(self.title))
 
     @property
     def garcia(self):
@@ -1015,6 +1053,21 @@ class Blob:
         self.angels_target = 0.0   # (The Black Angels)
         self.flap = 0.0            # wing-beat phase
         self.flap_boost = 0.0      # 1 -> 0 after a kick: a big, fast wing stroke
+        self.ehg = 0.0             # easter egg: barbed wire, grime, flies (EyeHateGod)
+        self.ehg_target = 0.0
+        # grime stains on the body: (angle, distance, size), fixed so they don't flicker
+        self.grime = [(random.uniform(0, TAU), random.uniform(0.1, 0.8), random.uniform(0.08, 0.2))
+                      for _ in range(9)]
+        self.wizard = 0.0          # easter egg: purple hood, green eyes, fog, slow doom (Electric Wizard)
+        self.wizard_target = 0.0
+        self.doors = 0.0           # easter egg: Morrison's curls and a bead necklace (The Doors)
+        self.doors_target = 0.0
+        self.storm = 0.0           # Riders on the Storm: rain and lightning
+        self.storm_target = 0.0
+        self.lightning = 0.0       # 1 -> 0 after a strike
+        self.bolt = []             # the strike's zigzag, as fractions of the screen
+        self.fire = 0.0            # Light My Fire: flames
+        self.fire_target = 0.0
         # The Cure's backcombed hair: (angle, length, kink) per strand, fixed so it doesn't flicker
         self.cure_hair = [(random.uniform(-math.pi - 0.35, 0.35), random.uniform(0.3, 0.75),
                            random.uniform(-0.6, 0.6)) for _ in range(46)]
@@ -1083,6 +1136,41 @@ class Blob:
         self.interpol += (self.interpol_target - self.interpol) * min(1, dt * 1.2)
         self.cure += (self.cure_target - self.cure) * min(1, dt * 1.2)
         self.angels += (self.angels_target - self.angels) * min(1, dt * 1.2)
+        self.ehg += (self.ehg_target - self.ehg) * min(1, dt * 1.2)
+        self.wizard += (self.wizard_target - self.wizard) * min(1, dt * 0.8)
+        self.doors += (self.doors_target - self.doors) * min(1, dt * 1.2)
+        self.storm += (self.storm_target - self.storm) * min(1, dt * 0.8)
+        self.fire += (self.fire_target - self.fire) * min(1, dt * 1.2)
+        self.lightning = max(0.0, self.lightning - dt * 2.5)
+        if self.storm > 0.5 and random.random() < dt / 7:
+            # lightning: a jagged bolt from the top of the screen, every few seconds
+            x, self.bolt = random.uniform(0.1, 0.9), []
+            for i in range(9):
+                self.bolt.append((x, i / 8 * random.uniform(0.55, 0.75)))
+                x += random.uniform(-0.04, 0.04)
+            self.lightning = 1.0
+        if self.ehg > 0.3 and sum(p.kind == "fly" for p in self.particles) < 7 \
+                and random.random() < dt * 2 and len(self.particles) < self.max_particles:
+            ang = random.uniform(0, TAU)
+            self.particles.append(Particle(
+                self.x + math.cos(ang) * self.R * 2, self.y + math.sin(ang) * self.R * 2,
+                0, 0, random.uniform(6, 12), 0.0, random.uniform(2.2, 3.2), "fly"))
+        if self.wizard > 0.3 and random.random() < dt * 5 * self.wizard \
+                and len(self.particles) < self.max_particles:
+            # low purple fog rolling across the floor
+            d = random.choice((-1, 1))
+            self.particles.append(Particle(
+                W * random.uniform(0, 1), H - random.uniform(0, H * 0.12), d * random.uniform(15, 40),
+                random.uniform(-6, 0), random.uniform(4, 7), random.uniform(0.74, 0.8),
+                self.R * random.uniform(0.6, 1.1), "fog"))
+        if self.fire > 0.3 and random.random() < dt * 30 * self.fire:
+            # Light My Fire: flames lick up off the blob
+            u = random.uniform(-0.7, 0.7)
+            self.emit(Particle(
+                self.x + u * self.R, self.y - self.R * (0.75 - 0.4 * u * u),
+                self.vx * 0.2 + random.uniform(-20, 20), random.uniform(-160, -90),
+                random.uniform(0.5, 0.9), random.uniform(0.0, 0.12), self.R * random.uniform(0.1, 0.18),
+                "flame"))
         if self.angels > 0.01:
             # slow wing beats, one per two beats of the song, faster right after a kick
             P = a.beat_period
@@ -1144,6 +1232,7 @@ class Blob:
         self.sway += dt * (math.pi / P if P else 1.4)
 
         self.g = lerp(1100.0, 2500.0, m) * (1 - 0.8 * self.hover)   # lazy/breakdown floats, crazy snaps
+        self.g *= 1 - 0.45 * self.wizard     # Electric Wizard: slow, floaty doom
         r = self.radius(bass)
 
         # drum events
@@ -1310,6 +1399,14 @@ class Blob:
             # Interpol: a muted, dark red, like the bright lights through a red filter
             want = 0.985 + 0.01 * math.sin(self.t * 0.4)
             self.hue += (((want - self.hue) + 0.5) % 1.0 - 0.5) * self.interpol * min(1, dt * 3)
+        if self.ehg > 0.01:
+            # EyeHateGod: dirty, rusty olive-brown
+            want = 0.1 + 0.02 * math.sin(self.t * 0.3)
+            self.hue += (((want - self.hue) + 0.5) % 1.0 - 0.5) * self.ehg * min(1, dt * 3)
+        if self.wizard > 0.01:
+            # Electric Wizard: occult purple
+            want = 0.79 + 0.03 * math.sin(self.t * 0.25)
+            self.hue += (((want - self.hue) + 0.5) % 1.0 - 0.5) * self.wizard * min(1, dt * 3)
         if self.tool > 0.01:
             # Tool: deep indigo and violet, the colours of the visionary art
             want = 0.72 + 0.06 * math.sin(self.t * 0.4)
@@ -1356,6 +1453,17 @@ class Blob:
             elif p.kind == "smoke":
                 p.vx += math.sin(self.t * 1.5 + p.rot) * 30 * dt   # curls as it rises
                 p.size += dt * 9
+            elif p.kind == "fly":
+                # buzzes round the blob in jittery loops, drawn back when it strays
+                p.vx += (random.gauss(0, 1) * 2500 + (self.x - p.x) * 6) * dt
+                p.vy += (random.gauss(0, 1) * 2500 + (self.y - p.y) * 6) * dt
+                p.vx *= max(0.0, 1 - 2.5 * dt)
+                p.vy *= max(0.0, 1 - 2.5 * dt)
+            elif p.kind == "fog":
+                p.size += dt * 6
+            elif p.kind == "flame":
+                p.vx += math.sin(self.t * 9 + p.rot) * 120 * dt   # flickers as it rises
+                p.vy -= 60 * dt
             elif p.kind == "moth":
                 # flutters about in loops, no gravity, slowing after a scatter
                 p.vx += math.sin(self.t * 2.3 + p.rot) * 140 * dt
@@ -1372,7 +1480,8 @@ class Blob:
 
     def dark(self, rgb, k=0.85):
         """Fade a colour toward DARK as the music gets heavy."""
-        t = max(self.heavy, 0.5 * self.nin, 0.3 * self.rage, 0.35 * self.acid, 0.3 * self.nola, 0.4 * self.interpol) * k   # egg palettes
+        t = max(self.heavy, 0.5 * self.nin, 0.3 * self.rage, 0.35 * self.acid, 0.3 * self.nola, 0.4 * self.interpol,
+                0.45 * self.ehg, 0.3 * self.wizard) * k   # egg palettes
         return tuple(c + (d - c) * t for c, d in zip(rgb, DARK))
 
     def emit(self, p):
@@ -1606,10 +1715,14 @@ class Blob:
         sat *= 1 - 0.85 * self.nin        # NIN: nearly black and white
         sat *= 1 - 0.35 * self.interpol   # Interpol: muted
         sat *= 1 - 0.9 * self.cure        # The Cure: deathly pale
+        sat *= 1 - 0.5 * self.ehg         # EyeHateGod: filthy
         if self.tool > 0.01:
             self.draw_mandala(cr, a, self.R)   # base size: the bass pulse is built in
         if self.angels > 0.01:
             self.draw_light_show(cr, a, r)
+        for p in self.particles:
+            if p.kind == "fog":
+                self.draw_particle(cr, p)
 
         # psychedelic ghost trail
         n = len(self.trail)
@@ -1621,7 +1734,7 @@ class Blob:
 
         # particles behind (smoke rises in front of the face, drawn last)
         for p in self.particles:
-            if p.kind != "smoke":
+            if p.kind not in ("smoke", "fog", "fly", "flame"):
                 self.draw_particle(cr, p)
 
         if self.nin > 0.3 and self.glitch > 0.05:
@@ -1631,7 +1744,7 @@ class Blob:
         if self.korn > 0.01:
             self.draw_leash(cr, r)
         for p in self.particles:
-            if p.kind == "smoke":
+            if p.kind in ("smoke", "fly", "flame"):
                 self.draw_particle(cr, p)
 
     def draw_body(self, cr, a, r, sat):
@@ -1675,7 +1788,7 @@ class Blob:
             cr.translate(-self.x, -self.y)
             smooth_closed_path(cr, pts)
             glow = hsv(self.hue + 0.5 * (1 - max(self.desert, self.tool, self.rage, self.acid, self.nola,
-                                                self.interpol)), sat)  # on-palette
+                                                self.interpol, self.ehg, self.wizard)), sat)  # on-palette
             glow = tuple(lerp(c, d, self.heavy) for c, d in zip(glow, (0.75, 0.0, 0.05)))
             cr.set_source_rgba(*glow, al + a.level * 0.08 + self.crazy * 0.08)
             cr.fill()
@@ -1702,7 +1815,8 @@ class Blob:
             dist = r * (0.35 + 0.25 * math.sin(at * 1.3 + j * 2))
             sr = r * (0.18 + 0.12 * a.spectrum[(j * 5) % 32])
             spot = (0.25 + j * 0.13) * (1 - 0.8 * max(self.desert, self.tool, self.rage, self.acid,
-                                                    1.2 * self.nola, self.interpol))  # egg hues
+                                                    1.2 * self.nola, self.interpol, self.ehg,
+                                                    self.wizard))  # egg hues
             cr.set_source_rgba(*self.dark(hsv(self.hue + spot, 0.9 * sat, 1), 0.9), 0.55)
             cr.arc(self.x + math.cos(ang) * dist, self.y + math.sin(ang) * dist, sr, 0, TAU)
             cr.fill()
@@ -1710,6 +1824,8 @@ class Blob:
             self.draw_acid_bubbles(cr, a, r)
         if self.angels > 0.01:
             self.draw_op_art(cr, a, r)
+        if self.ehg > 0.01:
+            self.draw_grime(cr, r)
         if self.interpol > 0.01:
             self.draw_suit(cr, r)
         if self.nin > 0.01:
@@ -1748,6 +1864,12 @@ class Blob:
             self.draw_chain(cr, r)
         if self.korn > 0.01:
             self.draw_collar(cr, r)
+        if self.ehg > 0.01:
+            self.draw_barbed_wire(cr, r)
+        if self.doors > 0.01:
+            self.draw_beads(cr, r)
+        if self.wizard > 0.01:
+            self.draw_hood(cr, r)
         if self.acid > 0.01:
             self.draw_moss(cr, r, strands=False)   # the clump sits behind the forehead
         self.draw_face(cr, a, r)
@@ -2518,6 +2640,181 @@ class Blob:
             cr.set_source_rgba(*hsv(self.hue + i * 0.25 + 0.1 * math.sin(t * 0.3), 0.9, 1), 0.13 * k)
             cr.fill()
 
+    def draw_grime(self, cr, r):
+        """Easter egg (EyeHateGod): dirty stains smeared over the body. Called with the body as
+        the clip."""
+        k = self.ehg
+        for ang, d, sz in self.grime:
+            gx = self.x + math.cos(ang + self.spin * 0.3) * d * r
+            gy = self.y + math.sin(ang + self.spin * 0.3) * d * r
+            g = cairo.RadialGradient(gx, gy, 0, gx, gy, sz * r * 1.5)
+            g.add_color_stop_rgba(0, 0.12, 0.09, 0.03, 0.55 * k)
+            g.add_color_stop_rgba(1, 0.12, 0.09, 0.03, 0)
+            cr.set_source(g)
+            cr.arc(gx, gy, sz * r * 1.5, 0, TAU)
+            cr.fill()
+
+    def draw_barbed_wire(self, cr, r):
+        """Easter egg (EyeHateGod): twisted barbed wire wrapped round the body, with barbs every
+        so often, digging in as it squashes. The upper wrap only crosses the sides, not the face."""
+        k = self.ehg
+        cr.save()
+        cr.set_line_cap(cairo.LINE_CAP_ROUND)
+        for yo, tilt, spans in ((0.62, 0.12, ((-1.0, 1.0),)),
+                                (-0.05, -0.18, ((-1.0, -0.55), (0.55, 1.0)))):
+            def at(u):     # u in -1..1 across the front of the body
+                v = yo + tilt * u
+                w = r * math.sqrt(max(0.0, 1 - v * v)) * 1.02
+                return (self.x + u * w, self.y + v * r * (1 - 0.3 * self.squash) + (1 - u * u) * r * 0.08)
+            for u0, u1 in spans:
+                for strand in (0, 1):
+                    n = 40
+                    for i in range(n + 1):
+                        u = u0 + (u1 - u0) * i / n
+                        x, y = at(u)
+                        y += math.sin(u * 30 + strand * math.pi) * r * 0.018
+                        (cr.move_to if i == 0 else cr.line_to)(x, y)
+                    cr.set_source_rgba(0.2, 0.19, 0.18, k)
+                    cr.set_line_width(max(2.0, r * 0.03))
+                    cr.stroke()
+                cr.set_source_rgba(0.28, 0.27, 0.26, k)
+                cr.set_line_width(max(1.6, r * 0.024))
+                steps = max(1, int((u1 - u0) / 0.22))
+                for i in range(steps):
+                    u = u0 + (u1 - u0) * (i + 0.5) / steps
+                    x, y = at(u)
+                    b = r * 0.075
+                    cr.move_to(x - b, y - b)
+                    cr.line_to(x + b, y + b)
+                    cr.move_to(x + b, y - b)
+                    cr.line_to(x - b, y + b)
+                    cr.stroke()
+        cr.restore()
+
+    def draw_hood(self, cr, r):
+        """Easter egg (Electric Wizard): a dark purple cultist's hood, peaked on top, with the
+        face peering out of the shadow."""
+        k = self.wizard
+        x, y = self.x, self.y
+        sway = math.sin(self.t * 0.8) * r * 0.04 - self.vx / 4000 * r
+        cr.save()
+        cr.move_to(x + sway * 3, y - r * 1.55)                       # the peak
+        cr.curve_to(x + r * 0.5, y - r * 1.3, x + r * 1.35, y - r * 0.6, x + r * 1.28, y + r * 0.25)
+        cr.curve_to(x + r * 1.25, y + r * 0.7, x + r * 1.05, y + r * 1.05, x + r * 0.8, y + r * 1.15)
+        cr.line_to(x - r * 0.8, y + r * 1.15)
+        cr.curve_to(x - r * 1.05, y + r * 1.05, x - r * 1.25, y + r * 0.7, x - r * 1.28, y + r * 0.25)
+        cr.curve_to(x - r * 1.35, y - r * 0.6, x - r * 0.5, y - r * 1.3, x + sway * 3, y - r * 1.55)
+        cr.close_path()
+        cr.new_sub_path()                                             # the opening for the face
+        cr.save()
+        cr.translate(x, y + r * 0.08)
+        cr.scale(r * 0.8, r * 0.78)
+        cr.arc_negative(0, 0, 1, TAU, 0)
+        cr.restore()
+        cr.close_path()
+        cr.set_fill_rule(cairo.FILL_RULE_EVEN_ODD)
+        g = cairo.LinearGradient(x - r, y - r, x + r, y + r)
+        g.add_color_stop_rgba(0, 0.3, 0.12, 0.42, k)
+        g.add_color_stop_rgba(1, 0.12, 0.03, 0.18, k)
+        cr.set_source(g)
+        cr.fill_preserve()
+        cr.set_source_rgba(0.05, 0.0, 0.08, k)
+        cr.set_line_width(max(1.5, r * 0.025))
+        cr.stroke()
+        # shadow inside the hood's rim
+        cr.set_fill_rule(cairo.FILL_RULE_WINDING)
+        cr.save()
+        cr.translate(x, y + r * 0.08)
+        cr.scale(r * 0.8, r * 0.78)
+        cr.arc(0, 0, 1, 0, TAU)
+        cr.restore()
+        g = cairo.RadialGradient(x, y + r * 0.08, r * 0.55, x, y + r * 0.08, r * 0.8)
+        g.add_color_stop_rgba(0, 0.05, 0.0, 0.08, 0)
+        g.add_color_stop_rgba(1, 0.05, 0.0, 0.08, 0.7 * k)
+        cr.set_source(g)
+        cr.fill()
+        cr.restore()
+
+    def draw_beads(self, cr, r):
+        """Easter egg (The Doors): a string of wooden and turquoise beads across the chest,
+        swinging with the motion."""
+        k = self.doors
+        sw = max(-1.0, min(1.0, -self.vx / 1200)) * r * 0.08
+        cr.save()
+        n = 15
+        cr.set_line_width(max(1, r * 0.01))
+        for i in range(n):
+            u = i / (n - 1) * 2 - 1
+            bx = self.x + u * r * 0.72 + sw * (1 - u * u)
+            by = self.y + r * 0.55 + (1 - u * u) * r * 0.28
+            br = r * (0.075 if i % 3 == 0 else 0.055)
+            col = (0.25, 0.75, 0.72) if i % 3 == 0 else (0.5, 0.3, 0.15) if i % 2 else (0.85, 0.75, 0.55)
+            cr.arc(bx, by, br, 0, TAU)
+            cr.set_source_rgba(*col, k)
+            cr.fill_preserve()
+            cr.set_source_rgba(0.15, 0.08, 0.03, 0.8 * k)
+            cr.stroke()
+        cr.restore()
+
+    def draw_curls(self, cr, r):
+        """Easter egg (The Doors): Jim Morrison's mane of dark brown curls, framing the face
+        and bouncing with the blob."""
+        k = self.doors
+        x, y = self.x, self.y
+        bob = self.squash * r * 0.15
+        cr.save()
+        dark, light = (0.22, 0.13, 0.06), (0.4, 0.26, 0.13)
+        spots = []
+        for j in range(17):
+            ang = math.pi - 0.45 + j / 16 * (math.pi + 0.9)    # over the top and down the sides
+            rr = r * (0.95 + 0.06 * math.sin(j * 2.7))
+            spots.append((x + math.cos(ang) * rr, y + math.sin(ang) * rr * 0.92 - bob,
+                          r * (0.17 + 0.04 * ((j * 3) % 4) / 3)))
+        cr.set_source_rgba(*dark, k)
+        for sx, sy, sr in spots:
+            cr.new_sub_path()
+            cr.arc(sx, sy, sr, 0, TAU)
+        cr.fill()
+        cr.set_source_rgba(*light, 0.9 * k)                     # ringlets
+        cr.set_line_width(max(1.2, r * 0.022))
+        for i, (sx, sy, sr) in enumerate(spots):
+            cr.new_sub_path()
+            cr.arc(sx + sr * 0.15, sy, sr * 0.55, i, i + 4.5)
+            cr.stroke()
+        cr.restore()
+
+    def draw_storm(self, cr, W, H):
+        """Easter egg (The Doors, Riders on the Storm): rain slanting down the screen and
+        lightning now and then."""
+        k = self.storm
+        if k < 0.01:
+            return
+        t = self.t
+        cr.save()
+        cr.set_line_cap(cairo.LINE_CAP_ROUND)
+        cr.set_line_width(1.3)
+        cr.set_source_rgba(0.75, 0.82, 0.95, 0.35 * k)
+        for i in range(90):
+            fx = (i * 0.6180339) % 1
+            fy = (i * 0.7548776) % 1
+            sp = 0.8 + 0.4 * ((i * 7) % 5) / 4
+            y = ((fy + t * 0.9 * sp) % 1.1 - 0.05) * H
+            x = (((fx + t * 0.12 * sp) % 1) * W + y * 0.15) % W
+            cr.move_to(x, y)
+            cr.line_to(x - 6, y - 26 * sp)
+        cr.stroke()
+        if self.lightning > 0.01 and self.bolt:
+            lt = self.lightning
+            cr.set_source_rgba(0.85, 0.9, 1.0, 0.18 * lt * lt * k)
+            cr.paint()
+            for w, al in ((10, 0.25), (3, 0.95)):
+                for i, (bx, by) in enumerate(self.bolt):
+                    (cr.move_to if i == 0 else cr.line_to)(bx * W, by * H)
+                cr.set_source_rgba(0.9, 0.93, 1.0, al * lt * k)
+                cr.set_line_width(w)
+                cr.stroke()
+        cr.restore()
+
     def draw_flash(self, cr):
         """Full-screen colour flash on a drop."""
         if self.flash > 0.01:
@@ -2593,6 +2890,14 @@ class Blob:
             drawn_eyes.append((ex_, ey_, er))
             if self.cure > 0.01:
                 self.draw_eyeliner(cr, ex_, ey_, er, r, i)
+            if self.wizard > 0.01:
+                g = cairo.RadialGradient(ex_, ey_, er * 0.8, ex_, ey_, er * 1.7)
+                flick = 0.85 + 0.15 * math.sin(self.t * 7 + i * 2)
+                g.add_color_stop_rgba(0, 0.35, 1.0, 0.25, 0.75 * self.wizard * flick)
+                g.add_color_stop_rgba(1, 0.35, 1.0, 0.25, 0)
+                cr.set_source(g)
+                cr.arc(ex_, ey_, er * 1.7, 0, TAU)
+                cr.fill()
             self.draw_eye(cr, ex_, ey_, er, p, lid, a, idx=i)
             if xeyes > 0.02:
                 d = er * 0.6
@@ -2700,7 +3005,7 @@ class Blob:
         # era headwear, unless an easter egg already has something on (or growing out of) the head
         bare = 1 - max(self.korn, self.linkin, self.tool, self.horns, self.wright,
                        self.kurt * self.grunge, self.evil, self.rage, self.acid, self.nola,
-                       self.interpol, self.cure)
+                       self.interpol, self.cure, self.wizard, self.doors)
         if self.era90 * bare > 0.01:
             self.draw_cap(cr, face_y, r, self.era90 * bare)
         if self.y2k * bare > 0.01:
@@ -2713,6 +3018,8 @@ class Blob:
             self.draw_slick_hair(cr, r)
         if self.cure > 0.01:
             self.draw_cure_hair(cr, r)
+        if self.doors > 0.01:
+            self.draw_curls(cr, r)
         if self.layne > 0.01 and self.cool < 0.99:
             self.draw_round_glasses(cr, drawn_eyes, r, self.layne * (1 - self.cool))
         if self.kurt > 0.01 and self.cool < 0.99:
@@ -3526,6 +3833,42 @@ class Blob:
             cr.fill()
             cr.restore()
             return
+        if p.kind == "fly":
+            al = min(1, f * 4, (1 - f) * 8)
+            cr.set_source_rgba(0.75, 0.8, 0.85, 0.45 * al)          # buzzing wings: a blur
+            for d in (-1, 1):
+                cr.save()
+                cr.translate(p.x + d * p.size * 0.6, p.y - p.size * 0.5)
+                cr.scale(1, 0.55 + 0.45 * abs(math.sin(p.rot * 9)))
+                cr.arc(0, 0, p.size * 0.9, 0, TAU)
+                cr.restore()
+                cr.fill()
+            cr.set_source_rgba(0.05, 0.06, 0.04, al)
+            cr.arc(p.x, p.y, p.size, 0, TAU)
+            cr.fill()
+            return
+        if p.kind == "fog":
+            al = 0.16 * min(1, f * 3, (1 - f) * 3)
+            g = cairo.RadialGradient(p.x, p.y, 0, p.x, p.y, p.size)
+            g.add_color_stop_rgba(0, *hsv(p.hue, 0.55, 0.55), al)
+            g.add_color_stop_rgba(1, *hsv(p.hue, 0.55, 0.55), 0)
+            cr.set_source(g)
+            cr.arc(p.x, p.y, p.size, 0, TAU)
+            cr.fill()
+            return
+        if p.kind == "flame":
+            # yellow at the root, orange, then red as it burns out and shrinks
+            s = p.size * (0.3 + 0.7 * f)
+            cr.save()
+            cr.translate(p.x, p.y)
+            cr.move_to(0, -s * 2.2)
+            cr.curve_to(s * 0.5, -s * 1.2, s, -s * 0.4, s, 0)
+            cr.arc(0, 0, s, 0, math.pi)
+            cr.curve_to(-s, -s * 0.4, -s * 0.5, -s * 1.2, 0, -s * 2.2)
+            cr.restore()
+            cr.set_source_rgba(*hsv(p.hue * f, 0.9, 1), min(1, f * 1.6))
+            cr.fill()
+            return
         if p.kind == "sand":
             cr.set_source_rgba(*hsv(p.hue, 0.45, 0.95), 0.85 * min(1, f * 4, (1 - f) * 8))
             cr.arc(p.x, p.y, p.size, 0, TAU)
@@ -3690,6 +4033,12 @@ class Overlay(Gtk.Window):
         self.blob.interpol_target = 1.0 if np_.interpol else 0.0
         self.blob.cure_target = 1.0 if np_.cure else 0.0
         self.blob.angels_target = 1.0 if np_.angels else 0.0
+        self.blob.ehg_target = 1.0 if np_.ehg else 0.0
+        self.blob.wizard_target = 1.0 if np_.wizard else 0.0
+        self.blob.doors_target = 1.0 if np_.doors else 0.0
+        song = np_.doors_song
+        self.blob.storm_target = 1.0 if song == "storm" else 0.0
+        self.blob.fire_target = 1.0 if song == "fire" else 0.0
         self.queue_draw()
         return GLib.SOURCE_CONTINUE
 
@@ -3702,6 +4051,7 @@ class Overlay(Gtk.Window):
         if self.show_vignette:
             self.draw_vignette(cr)
         self.blob.draw_desert_sun(cr, self.get_allocated_width(), self.get_allocated_height(), self.audio)
+        self.blob.draw_storm(cr, self.get_allocated_width(), self.get_allocated_height())
         self.blob.draw_flash(cr)
         if self.show_scope:
             self.draw_scope(cr)

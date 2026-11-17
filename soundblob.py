@@ -619,6 +619,11 @@ def acid_bath_on(artists, title, album=""):
         "deadboy and the elephantmen", "shrüm", "shrum"})
 
 
+def nola_on(artists, title, album=""):
+    """Is this Down or Corrosion of Conformity (Pepper Keenan's NOLA / Southern sludge)?"""
+    return _plays_on(artists, title, album, {"down", "corrosion of conformity"})
+
+
 def garcia_on(artists, title, album=""):
     """Is John Garcia singing on this track?"""
     if any("john garcia" in a.lower() for a in artists):
@@ -741,7 +746,9 @@ class NowPlaying:
     Park puts on headphones, sprays graffiti paint and screams the choruses. Rage Against the
     Machine masks it with a bandana under a red star and kill-switch stutters it. Acid Bath
     drags it through the bayou: swamp-green, melting and dripping acid, draped in Spanish moss,
-    bubbling inside, with black butterflies fluttering around that scatter when it gets loud."""
+    bubbling inside, with black butterflies fluttering around that scatter when it gets loud.
+    Down and Corrosion of Conformity grow it a big Southern beard, put a gold fleur-de-lis on
+    its forehead, turn it whiskey-brown and set it swaggering through a haze of smoke."""
 
     BUS_NAME = "org.mpris.MediaPlayer2.spotify"
 
@@ -832,6 +839,10 @@ class NowPlaying:
     @property
     def acid_bath(self):
         return self.playing and acid_bath_on(self.artists, self.title, self.album)
+
+    @property
+    def nola(self):
+        return self.playing and nola_on(self.artists, self.title, self.album)
 
     @property
     def garcia(self):
@@ -961,6 +972,10 @@ class Blob:
         self.kill = 0.0            # seconds of kill-switch stutter left
         self.acid = 0.0            # easter egg: swamp green, melting, moss, butterflies (Acid Bath)
         self.acid_target = 0.0
+        self.nola = 0.0            # easter egg: beard, fleur-de-lis, whiskey, swagger, haze (Down/COC)
+        self.nola_target = 0.0
+        self.beard_sw = 0.0        # beard swing (spring), sideways
+        self.beard_v = 0.0
         # era awareness (release year from MusicBrainz): the 90s and the early 2000s
         self.era90 = 0.0           # backwards cap, Memphis-pattern confetti, VHS camcorder overlay
         self.era90_target = 0.0
@@ -1022,6 +1037,7 @@ class Blob:
         self.rage += (self.rage_target - self.rage) * min(1, dt * 1.5)
         self.kill = max(0.0, self.kill - dt)
         self.acid += (self.acid_target - self.acid) * min(1, dt * 1.2)
+        self.nola += (self.nola_target - self.nola) * min(1, dt * 1.2)
         self.era90 += (self.era90_target - self.era90) * min(1, dt * 1.5)
         self.y2k += (self.y2k_target - self.y2k) * min(1, dt * 1.5)
         self.scream = self.linkin * clamp01((self.grunge - 0.45) / 0.4)
@@ -1059,6 +1075,18 @@ class Blob:
                     self.x + math.cos(ang) * r0 * 1.3, self.y + math.sin(ang) * r0 * 1.3,
                     math.cos(ang) * 40, math.sin(ang) * 40 - 30, random.uniform(3.5, 5.5), 0.08,
                     random.uniform(9, 14), "moth"))
+        if self.nola > 0.01:
+            # the beard swings against the motion and with the headbang
+            want = max(-1.0, min(1.0, -self.vx / 900)) + self.nod * self.nod_side * 0.5
+            self.beard_v += ((want - self.beard_sw) * 45 - self.beard_v * 5) * dt
+            self.beard_sw += self.beard_v * dt
+            # a lazy haze of smoke hangs around it
+            if self.nola > 0.3 and random.random() < dt * 3 * self.nola and len(self.particles) < self.max_particles:
+                ang = random.uniform(0, TAU)
+                self.particles.append(Particle(
+                    self.x + math.cos(ang) * self.R * 1.1, self.y + math.sin(ang) * self.R * 0.9,
+                    random.uniform(-25, 25), random.uniform(-30, -10), random.uniform(2.5, 3.5),
+                    0.0, self.R * random.uniform(0.15, 0.25), "smoke"))
         mel = 0.0 if quiet_level(level) else a.mellow
         self.mellow += (mel - self.mellow) * min(1, dt * 1.2)
         M = self.mellow
@@ -1224,6 +1252,10 @@ class Blob:
             # Acid Bath: sickly swamp green, drifting toward murky olive
             want = 0.28 + 0.04 * math.sin(self.t * 0.5)
             self.hue += (((want - self.hue) + 0.5) % 1.0 - 0.5) * self.acid * min(1, dt * 3)
+        if self.nola > 0.01:
+            # Down / COC: whiskey amber and bourbon brown
+            want = 0.075 + 0.015 * math.sin(self.t * 0.5)
+            self.hue += (((want - self.hue) + 0.5) % 1.0 - 0.5) * self.nola * min(1, dt * 3)
         if self.tool > 0.01:
             # Tool: deep indigo and violet, the colours of the visionary art
             want = 0.72 + 0.06 * math.sin(self.t * 0.4)
@@ -1286,7 +1318,7 @@ class Blob:
 
     def dark(self, rgb, k=0.85):
         """Fade a colour toward DARK as the music gets heavy."""
-        t = max(self.heavy, 0.5 * self.nin, 0.3 * self.rage, 0.35 * self.acid) * k   # egg palettes
+        t = max(self.heavy, 0.5 * self.nin, 0.3 * self.rage, 0.35 * self.acid, 0.3 * self.nola) * k   # egg palettes
         return tuple(c + (d - c) * t for c, d in zip(rgb, DARK))
 
     def emit(self, p):
@@ -1334,7 +1366,7 @@ class Blob:
                     self.x + math.cos(ang) * self.R, self.y + math.sin(ang) * self.R,
                     math.cos(ang) * sp, math.sin(ang) * sp, random.uniform(2.5, 4.0), 0.08,
                     random.uniform(9, 14), "moth"))
-        self.nod = min(1.0, 0.5 + 0.25 * s)
+        self.nod = min(1.0, 0.5 + 0.25 * s + 0.3 * self.nola)   # Down / COC: big slow headbangs
         self.squash_v += 1.5 + s * (0.5 + self.horns)
         self.squash_ang = -math.pi / 2
         self.nod_side = -self.nod_side
@@ -1548,7 +1580,7 @@ class Blob:
         cr.save()
         cr.translate(*self.shake)
         # mellow: rocks its head side to side
-        tilt = 0.14 * self.mellow * math.sin(self.sway)
+        tilt = (0.14 * self.mellow + 0.1 * self.nola) * math.sin(self.sway)   # Down / COC: swagger
         if abs(tilt) > 1e-3:
             cr.translate(self.x, self.y)
             cr.rotate(tilt)
@@ -1579,7 +1611,7 @@ class Blob:
             cr.scale(k, k)
             cr.translate(-self.x, -self.y)
             smooth_closed_path(cr, pts)
-            glow = hsv(self.hue + 0.5 * (1 - max(self.desert, self.tool, self.rage, self.acid)), sat)  # eggs: on-palette
+            glow = hsv(self.hue + 0.5 * (1 - max(self.desert, self.tool, self.rage, self.acid, self.nola)), sat)  # on-palette
             glow = tuple(lerp(c, d, self.heavy) for c, d in zip(glow, (0.75, 0.0, 0.05)))
             cr.set_source_rgba(*glow, al + a.level * 0.08 + self.crazy * 0.08)
             cr.fill()
@@ -1605,7 +1637,7 @@ class Blob:
             ang = self.spin * (1 if j % 2 else -0.7) + j * TAU / 6 + math.sin(at + j) * 0.5
             dist = r * (0.35 + 0.25 * math.sin(at * 1.3 + j * 2))
             sr = r * (0.18 + 0.12 * a.spectrum[(j * 5) % 32])
-            spot = (0.25 + j * 0.13) * (1 - 0.8 * max(self.desert, self.tool, self.rage, self.acid))  # egg's hues
+            spot = (0.25 + j * 0.13) * (1 - 0.8 * max(self.desert, self.tool, self.rage, self.acid, 1.2 * self.nola))  # egg's hues
             cr.set_source_rgba(*self.dark(hsv(self.hue + spot, 0.9 * sat, 1), 0.9), 0.55)
             cr.arc(self.x + math.cos(ang) * dist, self.y + math.sin(ang) * dist, sr, 0, TAU)
             cr.fill()
@@ -2089,6 +2121,104 @@ class Blob:
             cr.stroke()
         cr.restore()
 
+    def draw_fleur_de_lis(self, cr, x, y, size):
+        """Easter egg (Down / COC): New Orleans' gold fleur-de-lis on the forehead, flaring on
+        the drums."""
+        k = self.nola
+        s = size * (1 + 0.15 * self.penta_pulse)
+        cr.save()
+        cr.translate(x, y)
+        cr.scale(s, s)
+        # centre petal
+        cr.move_to(0, -1.25)
+        cr.curve_to(0.45, -0.75, 0.38, -0.05, 0.12, 0.25)
+        cr.line_to(-0.12, 0.25)
+        cr.curve_to(-0.38, -0.05, -0.45, -0.75, 0, -1.25)
+        cr.close_path()
+        # side petals, curling out and down
+        for d in (-1, 1):
+            cr.move_to(d * 0.14, 0.2)
+            cr.curve_to(d * 0.2, -0.35, d * 0.75, -0.75, d * 1.0, -0.35)
+            cr.curve_to(d * 1.15, -0.05, d * 0.95, 0.25, d * 0.72, 0.2)
+            cr.curve_to(d * 0.85, 0.0, d * 0.75, -0.2, d * 0.55, -0.12)
+            cr.curve_to(d * 0.38, -0.05, d * 0.32, 0.12, d * 0.3, 0.3)
+            cr.close_path()
+        # the band
+        cr.rectangle(-0.5, 0.25, 1.0, 0.18)
+        # the foot below the band
+        cr.move_to(-0.12, 0.43)
+        cr.curve_to(-0.15, 0.7, -0.35, 0.85, -0.5, 0.9)
+        cr.line_to(0.5, 0.9)
+        cr.curve_to(0.35, 0.85, 0.15, 0.7, 0.12, 0.43)
+        cr.close_path()
+        path = cr.copy_path()
+        cr.restore()
+        cr.save()
+        cr.append_path(path)
+        cr.set_source_rgba(0.12, 0.06, 0.0, k)
+        cr.set_line_width(max(2.5, size * 0.16))
+        cr.set_line_join(cairo.LINE_JOIN_ROUND)
+        cr.stroke_preserve()
+        g = cairo.LinearGradient(x, y - size * 1.2, x, y + size)
+        flare = 0.25 * self.penta_pulse
+        g.add_color_stop_rgba(0, 1.0, 0.92, 0.55 + flare, k)
+        g.add_color_stop_rgba(0.5, 0.95, 0.72 + flare, 0.2 + flare, k)
+        g.add_color_stop_rgba(1, 0.7, 0.45, 0.08, k)
+        cr.set_source(g)
+        cr.fill()
+        cr.restore()
+
+    def draw_beard(self, cr, my, mw, mh, r):
+        """Easter egg (Down / COC): a big bushy Southern beard and moustache. The jaw drops it
+        as the mouth opens, and it swings with the motion and the headbang."""
+        k = self.nola
+        sw = self.beard_sw * r * 0.25
+        top = my + mh + r * 0.14                # hangs from under the lower lip, drops with the jaw
+        ln = r * (0.65 + 0.1 * self.nod)
+        dark, mid = (0.2, 0.11, 0.05), (0.33, 0.19, 0.08)
+        cr.save()
+        # fluffy mass: overlapping tufts, narrowing to the tip
+        cr.set_source_rgba(*dark, 0.97 * k)
+        for i in range(7):
+            f = i / 6
+            w = r * (0.62 - 0.42 * f)
+            cy = top + ln * f * 0.85
+            cx = self.x + sw * f * f
+            for j in range(-2, 3):
+                cr.new_sub_path()
+                cr.arc(cx + j * w * 0.45, cy + abs(j) * r * -0.04, r * (0.17 - 0.06 * f), 0, TAU)
+        # sideburns up the cheeks around the mouth
+        for d in (-1, 1):
+            cr.new_sub_path()
+            cr.arc(self.x + d * (mw + r * 0.14), my + r * 0.12, r * 0.15, 0, TAU)
+            cr.new_sub_path()
+            cr.arc(self.x + d * (mw + r * 0.18), my - r * 0.08, r * 0.12, 0, TAU)
+        cr.fill()
+        # strands for texture
+        cr.set_line_cap(cairo.LINE_CAP_ROUND)
+        cr.set_line_width(max(1.2, r * 0.02))
+        cr.set_source_rgba(*mid, 0.9 * k)
+        for i in range(11):
+            u = i / 10 * 2 - 1
+            x0 = self.x + u * r * 0.5
+            y0 = top + r * 0.05 + abs(u) * r * 0.05
+            l = ln * (0.85 - 0.45 * abs(u))
+            cr.move_to(x0, y0)
+            cr.curve_to(x0 + u * r * 0.05, y0 + l * 0.4, x0 + sw * 0.6 - u * r * 0.1, y0 + l * 0.75,
+                        x0 + sw - u * r * 0.25, y0 + l)
+        cr.stroke()
+        # moustache over the top lip, drooping at the ends
+        cr.set_source_rgba(*dark, 0.97 * k)
+        for d in (-1, 1):
+            cr.move_to(self.x, my - r * 0.1)
+            cr.curve_to(self.x + d * mw * 0.6, my - r * 0.17, self.x + d * mw * 1.1, my - r * 0.08,
+                        self.x + d * (mw + r * 0.08), my + r * 0.18)
+            cr.curve_to(self.x + d * mw * 0.9, my + r * 0.02, self.x + d * mw * 0.5, my - r * 0.02,
+                        self.x, my + r * 0.0)
+            cr.close_path()
+        cr.fill()
+        cr.restore()
+
     def draw_flash(self, cr):
         """Full-screen colour flash on a drop."""
         if self.flash > 0.01:
@@ -2195,8 +2325,10 @@ class Blob:
                 self.draw_seed_of_life(cr, self.x, face_y - r * 0.5, r * 0.16 * s, self.tool)
             self.draw_eye(cr, self.x, face_y - r * 0.5, r * 0.16 * s, self.pupils[0], 0, a,
                           hue_eye=True, idx=2)
-        if self.heavy > 0.15 and self.tool < 0.5 and self.rage < 0.5:
+        if self.heavy > 0.15 and self.tool < 0.5 and self.rage < 0.5 and self.nola < 0.5:
             self.draw_pentagram(cr, self.x, face_y - r * 0.7, r * 0.2)
+        elif self.nola > 0.01:
+            self.draw_fleur_de_lis(cr, self.x, face_y - r * 0.7, r * 0.22)
         elif self.rage > 0.01:
             self.draw_red_star(cr, self.x, face_y - r * 0.68, r * 0.2)
         elif self.wright > 0.01:
@@ -2263,13 +2395,15 @@ class Blob:
             self.draw_headphones(cr, face_y, r)
         # era headwear, unless an easter egg already has something on (or growing out of) the head
         bare = 1 - max(self.korn, self.linkin, self.tool, self.horns, self.wright,
-                       self.kurt * self.grunge, self.evil, self.rage, self.acid)
+                       self.kurt * self.grunge, self.evil, self.rage, self.acid, self.nola)
         if self.era90 * bare > 0.01:
             self.draw_cap(cr, face_y, r, self.era90 * bare)
         if self.y2k * bare > 0.01:
             self.draw_frosted_tips(cr, r, self.y2k * bare)
         if self.rage > 0.01:
             self.draw_bandana(cr, face_y, my, mh, r)
+        if self.nola > 0.01:
+            self.draw_beard(cr, my, mw, mh, r)
         if self.layne > 0.01 and self.cool < 0.99:
             self.draw_round_glasses(cr, drawn_eyes, r, self.layne * (1 - self.cool))
         if self.kurt > 0.01 and self.cool < 0.99:
@@ -3243,6 +3377,7 @@ class Overlay(Gtk.Window):
         self.blob.y2k_target = 1.0 if 2000 <= year <= 2004 else 0.0
         self.blob.rage_target = 1.0 if np_.rage else 0.0
         self.blob.acid_target = 1.0 if np_.acid_bath else 0.0
+        self.blob.nola_target = 1.0 if np_.nola else 0.0
         self.queue_draw()
         return GLib.SOURCE_CONTINUE
 

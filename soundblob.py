@@ -634,6 +634,11 @@ def cure_on(artists, title, album=""):
     return _plays_on(artists, title, album, {"the cure", "robert smith", "the glove"})
 
 
+def angels_on(artists, title, album=""):
+    """Is this The Black Angels?"""
+    return _plays_on(artists, title, album, {"the black angels", "black angels"})
+
+
 def garcia_on(artists, title, album=""):
     """Is John Garcia singing on this track?"""
     if any("john garcia" in a.lower() for a in artists):
@@ -761,7 +766,8 @@ class NowPlaying:
     its forehead, turn it whiskey-brown and set it swaggering through a haze of smoke. Interpol
     dresses it in a sharp black suit and tie with slicked hair, dark red and composed, and The
     Cure turns it pale with a huge backcombed tangle of black hair, running eyeliner and smeared
-    red lipstick."""
+    red lipstick. The Black Angels give it black feathered wings that beat in time, hypnotic
+    op-art rings inside, and a 60s liquid light show behind it."""
 
     BUS_NAME = "org.mpris.MediaPlayer2.spotify"
 
@@ -864,6 +870,10 @@ class NowPlaying:
     @property
     def cure(self):
         return self.playing and cure_on(self.artists, self.title, self.album)
+
+    @property
+    def angels(self):
+        return self.playing and angels_on(self.artists, self.title, self.album)
 
     @property
     def garcia(self):
@@ -1001,6 +1011,10 @@ class Blob:
         self.interpol_target = 0.0
         self.cure = 0.0            # easter egg: pale, wild black hair, eyeliner, lipstick (The Cure)
         self.cure_target = 0.0
+        self.angels = 0.0          # easter egg: black wings, op-art rings, liquid light show
+        self.angels_target = 0.0   # (The Black Angels)
+        self.flap = 0.0            # wing-beat phase
+        self.flap_boost = 0.0      # 1 -> 0 after a kick: a big, fast wing stroke
         # The Cure's backcombed hair: (angle, length, kink) per strand, fixed so it doesn't flicker
         self.cure_hair = [(random.uniform(-math.pi - 0.35, 0.35), random.uniform(0.3, 0.75),
                            random.uniform(-0.6, 0.6)) for _ in range(46)]
@@ -1068,6 +1082,12 @@ class Blob:
         self.nola += (self.nola_target - self.nola) * min(1, dt * 1.2)
         self.interpol += (self.interpol_target - self.interpol) * min(1, dt * 1.2)
         self.cure += (self.cure_target - self.cure) * min(1, dt * 1.2)
+        self.angels += (self.angels_target - self.angels) * min(1, dt * 1.2)
+        if self.angels > 0.01:
+            # slow wing beats, one per two beats of the song, faster right after a kick
+            P = a.beat_period
+            self.flap += dt * ((math.pi / P if P else 2.0) + 9 * self.flap_boost)
+            self.flap_boost = max(0.0, self.flap_boost - dt * 2.5)
         self.era90 += (self.era90_target - self.era90) * min(1, dt * 1.5)
         self.y2k += (self.y2k_target - self.y2k) * min(1, dt * 1.5)
         self.scream = self.linkin * clamp01((self.grunge - 0.45) / 0.4)
@@ -1366,6 +1386,8 @@ class Blob:
 
     def on_kick(self, strength, W, H, a):
         self.penta_pulse = max(self.penta_pulse, 0.6)
+        if self.angels > 0.3:
+            self.flap_boost = 1.0
         if self.nin > 0.3 and random.random() < 0.3:
             self.glitch = 1.0
         if self.linkin > 0.3:
@@ -1586,6 +1608,8 @@ class Blob:
         sat *= 1 - 0.9 * self.cure        # The Cure: deathly pale
         if self.tool > 0.01:
             self.draw_mandala(cr, a, self.R)   # base size: the bass pulse is built in
+        if self.angels > 0.01:
+            self.draw_light_show(cr, a, r)
 
         # psychedelic ghost trail
         n = len(self.trail)
@@ -1640,6 +1664,8 @@ class Blob:
             pts = out
         if self.wright > 0.01:
             self.draw_prism_light(cr, a, r)
+        if self.angels > 0.01:
+            self.draw_wings(cr, r)
 
         # glow (bigger and brighter while a build-up charges)
         for k, al in ((1.45 + 0.4 * self.charge, 0.06 + 0.12 * self.charge), (1.22, 0.10)):
@@ -1682,6 +1708,8 @@ class Blob:
             cr.fill()
         if self.acid > 0.01:
             self.draw_acid_bubbles(cr, a, r)
+        if self.angels > 0.01:
+            self.draw_op_art(cr, a, r)
         if self.interpol > 0.01:
             self.draw_suit(cr, r)
         if self.nin > 0.01:
@@ -2416,6 +2444,79 @@ class Blob:
             cr.set_line_width(max(1.5, r * (0.025 + 0.02 * (i % 3))))
             cr.stroke()
         cr.restore()
+
+    def draw_wings(self, cr, r):
+        """Easter egg (The Black Angels): a pair of black feathered wings behind the body,
+        beating in time, with a big stroke on the kick."""
+        k = self.angels
+        beat = math.sin(self.flap)
+        cr.save()
+        cr.set_line_join(cairo.LINE_JOIN_ROUND)
+        for side in (-1, 1):
+            cr.save()
+            cr.translate(self.x + side * r * 0.6, self.y - r * 0.15)
+            cr.scale(side, 1)
+            cr.rotate(-0.15 - 0.45 * beat)            # up on the upstroke, down on the down
+            for j in range(7):
+                f = j / 6
+                ang = -0.95 + f * 1.45                 # fanned from up-and-out to out-and-down
+                ln = r * (1.45 - 0.55 * f) * (1 - 0.15 * abs(f - 0.3))
+                w = r * (0.2 - 0.05 * f)
+                cr.save()
+                cr.rotate(ang)
+                cr.move_to(0, 0)
+                cr.curve_to(ln * 0.35, -w, ln * 0.8, -w * 0.9, ln, 0)
+                cr.curve_to(ln * 0.8, w * 0.7, ln * 0.35, w * 0.8, 0, 0)
+                cr.close_path()
+                cr.set_source_rgba(0.05 + 0.03 * f, 0.03, 0.08 + 0.04 * f, 0.97 * k)
+                cr.fill_preserve()
+                cr.set_source_rgba(0.42, 0.3, 0.55, 0.55 * k)     # violet sheen on the edges
+                cr.set_line_width(max(1, r * 0.015))
+                cr.stroke()
+                # the quill
+                cr.move_to(r * 0.05, 0)
+                cr.line_to(ln * 0.85, 0)
+                cr.set_source_rgba(0.3, 0.25, 0.35, 0.6 * k)
+                cr.stroke()
+                cr.restore()
+            cr.restore()
+        cr.restore()
+
+    def draw_op_art(self, cr, a, r):
+        """Easter egg (The Black Angels): hypnotic black-and-white rings swirling inside the
+        body, rippling outward with the bass. Called with the body as the clip."""
+        k = self.angels
+        cx = self.x + math.sin(self.t * 0.7) * r * 0.25
+        cy = self.y + math.cos(self.t * 0.5) * r * 0.2
+        step = r * 0.13
+        ph = (self.t * 0.6 + a.bass * 0.3) % 1
+        cr.save()
+        cr.set_fill_rule(cairo.FILL_RULE_EVEN_ODD)
+        for i in range(16):
+            cr.new_sub_path()
+            cr.arc(cx, cy, step * (i + ph), 0, TAU)
+        cr.set_source_rgba(0.02, 0.02, 0.03, 0.4 * k)
+        cr.fill()
+        cr.restore()
+
+    def draw_light_show(self, cr, a, r):
+        """Easter egg (The Black Angels): a 60s liquid light show, big blobs of oil colour
+        slowly swelling and drifting behind the blob."""
+        k = self.angels
+        t = self.t
+        for i in range(4):
+            ox = math.sin(t * 0.21 + i * 1.7) * r * 1.6
+            oy = math.cos(t * 0.17 + i * 2.3) * r * 1.1
+            br = r * (1.6 + 0.3 * math.sin(t * 0.5 + i) + 0.4 * min(a.bass, 1.5))
+            pts = []
+            for j in range(18):
+                th = j / 18 * TAU
+                rr = br * (1 + 0.18 * math.sin(th * 3 + t * (0.6 + 0.1 * i) + i)
+                           + 0.1 * math.sin(th * 5 - t * 0.9))
+                pts.append((self.x + ox + math.cos(th) * rr, self.y + oy + math.sin(th) * rr))
+            smooth_closed_path(cr, pts)
+            cr.set_source_rgba(*hsv(self.hue + i * 0.25 + 0.1 * math.sin(t * 0.3), 0.9, 1), 0.13 * k)
+            cr.fill()
 
     def draw_flash(self, cr):
         """Full-screen colour flash on a drop."""
@@ -3588,6 +3689,7 @@ class Overlay(Gtk.Window):
         self.blob.nola_target = 1.0 if np_.nola else 0.0
         self.blob.interpol_target = 1.0 if np_.interpol else 0.0
         self.blob.cure_target = 1.0 if np_.cure else 0.0
+        self.blob.angels_target = 1.0 if np_.angels else 0.0
         self.queue_draw()
         return GLib.SOURCE_CONTINUE
 

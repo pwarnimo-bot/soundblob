@@ -676,8 +676,12 @@ def pearljam_on(artists, title, album=""):
 
 
 def fnm_on(artists, title, album=""):
-    """Is this Faith No More?"""
-    return _plays_on(artists, title, album, {"faith no more"})
+    """Is this Faith No More, or Mike Patton solo or in one of his many other bands?
+    (Mr. Bungle has its own easter egg.)"""
+    return _plays_on(artists, title, album, {
+        "faith no more", "mike patton", "tomahawk", "fantômas", "fantomas", "peeping tom",
+        "dead cross", "lovage", "mondo cane", "general patton vs the xecutioners",
+        "nevermen", "mike patton jeanclaude vannier"})
 
 
 def bungle_on(artists, title, album=""):
@@ -820,7 +824,7 @@ class NowPlaying:
     and flames for Light My Fire. The Melvins give it King Buzzo's giant grey fro and a robe
     printed with eyes, Queens of the Stone Age turn it into a clockwork wind-up toy, Marillion
     put it in a jester's hat with bells and harlequin face paint, and Pearl Jam dress it in
-    flannel with the ocean rolling in along the bottom of the screen. Faith No More leave a fish
+    flannel with the ocean rolling in along the bottom of the screen. Faith No More (and Mike Patton's other bands) leave a fish
     flopping on the floor beside it and snap its colours around like Patton switching genres,
     and Mr. Bungle give it a squishy clown nose, a party hat and carnival balloons."""
 

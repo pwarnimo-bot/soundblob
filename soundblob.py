@@ -654,6 +654,27 @@ def doors_on(artists, title, album=""):
     return _plays_on(artists, title, album, {"the doors", "doors"})
 
 
+def melvins_on(artists, title, album=""):
+    """Is this the Melvins (or King Buzzo solo)?"""
+    return _plays_on(artists, title, album, {"melvins", "the melvins", "melvins lite", "buzz osborne",
+                                             "king buzzo"})
+
+
+def qotsa_on(artists, title, album=""):
+    """Is this Queens of the Stone Age?"""
+    return _plays_on(artists, title, album, {"queens of the stone age"})
+
+
+def marillion_on(artists, title, album=""):
+    """Is this Marillion?"""
+    return _plays_on(artists, title, album, {"marillion"})
+
+
+def pearljam_on(artists, title, album=""):
+    """Is this Pearl Jam (or Eddie Vedder solo)?"""
+    return _plays_on(artists, title, album, {"pearl jam", "eddie vedder"})
+
+
 def garcia_on(artists, title, album=""):
     """Is John Garcia singing on this track?"""
     if any("john garcia" in a.lower() for a in artists):
@@ -786,7 +807,10 @@ class NowPlaying:
     wire, grimes it up and sets flies buzzing round it; Electric Wizard hoods it in purple, makes
     its eyes glow green and slows it to a floaty doom crawl through low purple fog; and The Doors
     give it Morrison's curls and a bead necklace, with a thunderstorm for Riders on the Storm
-    and flames for Light My Fire."""
+    and flames for Light My Fire. The Melvins give it King Buzzo's giant grey fro and a robe
+    printed with eyes, Queens of the Stone Age turn it into a clockwork wind-up toy, Marillion
+    put it in a jester's hat with bells and harlequin face paint, and Pearl Jam dress it in
+    flannel with the ocean rolling in along the bottom of the screen."""
 
     BUS_NAME = "org.mpris.MediaPlayer2.spotify"
 
@@ -912,6 +936,22 @@ class NowPlaying:
         if not self.doors:
             return None
         return {"riders on the storm": "storm", "light my fire": "fire"}.get(_norm(self.title))
+
+    @property
+    def melvins(self):
+        return self.playing and melvins_on(self.artists, self.title, self.album)
+
+    @property
+    def qotsa(self):
+        return self.playing and qotsa_on(self.artists, self.title, self.album)
+
+    @property
+    def marillion(self):
+        return self.playing and marillion_on(self.artists, self.title, self.album)
+
+    @property
+    def pearljam(self):
+        return self.playing and pearljam_on(self.artists, self.title, self.album)
 
     @property
     def garcia(self):
@@ -1068,6 +1108,18 @@ class Blob:
         self.bolt = []             # the strike's zigzag, as fractions of the screen
         self.fire = 0.0            # Light My Fire: flames
         self.fire_target = 0.0
+        self.melvins = 0.0         # easter egg: giant grey fro, robe printed with eyes (Melvins)
+        self.melvins_target = 0.0
+        self.qotsa = 0.0           # easter egg: clockwork gears inside, wind-up key (QOTSA)
+        self.qotsa_target = 0.0
+        self.gear = 0.0            # gear angle: ticks forward on every kick
+        self.gear_want = 0.0
+        self.key_spin = 0.0        # the wind-up key's turn
+        self.marillion = 0.0       # easter egg: jester's hat with bells, harlequin paint (Marillion)
+        self.marillion_target = 0.0
+        self.jingle = 0.0          # 1 -> 0 after a hi-hat: the bells shake
+        self.pearljam = 0.0        # easter egg: flannel shirt, ocean waves (Pearl Jam)
+        self.pearljam_target = 0.0
         # The Cure's backcombed hair: (angle, length, kink) per strand, fixed so it doesn't flicker
         self.cure_hair = [(random.uniform(-math.pi - 0.35, 0.35), random.uniform(0.3, 0.75),
                            random.uniform(-0.6, 0.6)) for _ in range(46)]
@@ -1142,6 +1194,13 @@ class Blob:
         self.storm += (self.storm_target - self.storm) * min(1, dt * 0.8)
         self.fire += (self.fire_target - self.fire) * min(1, dt * 1.2)
         self.lightning = max(0.0, self.lightning - dt * 2.5)
+        self.melvins += (self.melvins_target - self.melvins) * min(1, dt * 1.2)
+        self.qotsa += (self.qotsa_target - self.qotsa) * min(1, dt * 1.2)
+        self.marillion += (self.marillion_target - self.marillion) * min(1, dt * 1.2)
+        self.pearljam += (self.pearljam_target - self.pearljam) * min(1, dt * 1.2)
+        self.gear += (self.gear_want - self.gear) * min(1, dt * 25)      # snaps to each tick
+        self.key_spin += dt * (0.6 + 4 * level)
+        self.jingle = max(0.0, self.jingle - dt * 4)
         if self.storm > 0.5 and random.random() < dt / 7:
             # lightning: a jagged bolt from the top of the screen, every few seconds
             x, self.bolt = random.uniform(0.1, 0.9), []
@@ -1497,6 +1556,7 @@ class Blob:
         self.penta_pulse = max(self.penta_pulse, 0.6)
         if self.angels > 0.3:
             self.flap_boost = 1.0
+        self.gear_want += TAU / 24          # clockwork: one tooth per kick
         if self.nin > 0.3 and random.random() < 0.3:
             self.glitch = 1.0
         if self.linkin > 0.3:
@@ -1545,6 +1605,7 @@ class Blob:
 
     def on_hat(self):
         """Hi-hats (16ths in techno/psy): tiny sparks fizzing off the body."""
+        self.jingle = 1.0                    # Marillion: the jester's bells
         if random.random() < 0.3 + 0.5 * self.mood:
             ang = random.uniform(0, TAU)
             r = self.R
@@ -1779,6 +1840,8 @@ class Blob:
             self.draw_prism_light(cr, a, r)
         if self.angels > 0.01:
             self.draw_wings(cr, r)
+        if self.qotsa > 0.01:
+            self.draw_windup_key(cr, r)
 
         # glow (bigger and brighter while a build-up charges)
         for k, al in ((1.45 + 0.4 * self.charge, 0.06 + 0.12 * self.charge), (1.22, 0.10)):
@@ -1793,6 +1856,9 @@ class Blob:
             cr.set_source_rgba(*glow, al + a.level * 0.08 + self.crazy * 0.08)
             cr.fill()
             cr.restore()
+
+        if self.melvins > 0.01:
+            self.draw_fro(cr, r)        # over the glow, behind the body
 
         # body
         if self.nin > 0.01:
@@ -1826,6 +1892,12 @@ class Blob:
             self.draw_op_art(cr, a, r)
         if self.ehg > 0.01:
             self.draw_grime(cr, r)
+        if self.qotsa > 0.01:
+            self.draw_gears(cr, r)
+        if self.melvins > 0.01:
+            self.draw_eye_robe(cr, r)
+        if self.pearljam > 0.01:
+            self.draw_flannel(cr, r)
         if self.interpol > 0.01:
             self.draw_suit(cr, r)
         if self.nin > 0.01:
@@ -2815,6 +2887,277 @@ class Blob:
                 cr.stroke()
         cr.restore()
 
+    def draw_fro(self, cr, r):
+        """Easter egg (Melvins): King Buzzo's giant frizzy grey fro, a cloud of hair behind the
+        head that bounces with the blob."""
+        k = self.melvins
+        cx = self.x
+        cy = self.y - r * 0.35 - self.squash * r * 0.3
+        cr.save()
+        for layer, (col, rad, fuzz) in enumerate((((0.55, 0.55, 0.58), 1.42, 0.2),
+                                                  ((0.78, 0.78, 0.8), 1.32, 0.17))):
+            cr.set_source_rgba(*col, k)
+            for j in range(56):
+                ang = j / 56 * TAU
+                wob = 1 + 0.06 * math.sin(j * 2.9 + layer) + 0.03 * math.sin(self.t * 3 + j)
+                fx = cx + math.cos(ang) * r * rad * 0.95 * wob
+                fy = cy + math.sin(ang) * r * rad * 0.8 * wob
+                cr.new_sub_path()
+                cr.arc(fx, fy, r * fuzz * (0.8 + 0.4 * ((j * 7) % 5) / 4), 0, TAU)
+            cr.new_sub_path()
+            cr.save()
+            cr.translate(cx, cy)
+            cr.scale(r * rad * 0.95, r * rad * 0.8)
+            cr.arc(0, 0, 1, 0, TAU)
+            cr.restore()
+            cr.fill()
+        # frizz: little kinks all over
+        cr.set_source_rgba(0.5, 0.5, 0.53, 0.8 * k)
+        cr.set_line_width(max(1, r * 0.015))
+        for j in range(40):
+            ang = j * 2.39996
+            d = math.sqrt((j + 0.5) / 40)
+            fx = cx + math.cos(ang) * d * r * 1.3
+            fy = cy + math.sin(ang) * d * r * 1.05
+            cr.new_sub_path()
+            cr.arc(fx, fy, r * 0.05, j, j + 3.5)
+        cr.stroke()
+        cr.restore()
+
+    def draw_eye_robe(self, cr, r):
+        """Easter egg (Melvins): a dark red robe printed with eyes, all of them looking where the
+        blob's own googly eyes look. Called with the body as the clip."""
+        k = self.melvins
+        top = self.y + r * 0.5
+        cr.save()
+        cr.rectangle(self.x - r * 2, top, r * 4, r * 2)
+        cr.set_source_rgba(0.35, 0.04, 0.06, k)
+        cr.fill()
+        # the neckline
+        cr.move_to(self.x - r * 0.35, top)
+        cr.curve_to(self.x - r * 0.2, top + r * 0.2, self.x + r * 0.2, top + r * 0.2, self.x + r * 0.35, top)
+        cr.set_source_rgba(0.85, 0.65, 0.2, k)
+        cr.set_line_width(max(2, r * 0.04))
+        cr.stroke()
+        px, py = self.pupils[0][0], self.pupils[0][1]
+        for row in range(3):
+            for col in range(-4, 5):
+                ex = self.x + (col + 0.5 * (row % 2)) * r * 0.32
+                ey = top + r * (0.22 + row * 0.2)
+                er = r * 0.075
+                cr.save()
+                cr.translate(ex, ey)
+                cr.scale(1, 0.6)
+                cr.arc(0, 0, er, 0, TAU)
+                cr.restore()
+                cr.set_source_rgba(0.95, 0.92, 0.82, k)
+                cr.fill()
+                cr.arc(ex + px * er * 0.4, ey + py * er * 0.25, er * 0.38, 0, TAU)
+                cr.set_source_rgba(0.05, 0.05, 0.1, k)
+                cr.fill()
+        cr.restore()
+
+    def _gear_path(self, cr, gx, gy, rad, teeth, ang):
+        for i in range(teeth * 4):
+            a0 = ang + i / (teeth * 4) * TAU
+            rr = rad if (i // 2) % 2 == 0 else rad * 0.8
+            (cr.move_to if i == 0 else cr.line_to)(gx + math.cos(a0) * rr, gy + math.sin(a0) * rr)
+        cr.close_path()
+        cr.new_sub_path()
+        cr.arc_negative(gx, gy, rad * 0.3, TAU, 0)
+        cr.close_path()
+
+    def draw_gears(self, cr, r):
+        """Easter egg (QOTSA, ...Like Clockwork): brass gears meshing inside the body, ticking
+        forward a tooth on every kick. Called with the body as the clip."""
+        k = self.qotsa
+        cr.save()
+        cr.set_fill_rule(cairo.FILL_RULE_EVEN_ODD)
+        g = self.gear
+        for gx, gy, rad, teeth, d in ((-0.35, 0.15, 0.42, 12, 1), (0.33, -0.05, 0.3, 9, -12 / 9),
+                                      (0.2, 0.58, 0.24, 7, -12 / 7), (-0.55, -0.55, 0.26, 8, -1.5)):
+            self._gear_path(cr, self.x + gx * r, self.y + gy * r, rad * r, teeth, g * d)
+            cr.set_source_rgba(0.85, 0.62, 0.22, 0.42 * k)
+            cr.fill_preserve()
+            cr.set_source_rgba(0.35, 0.22, 0.05, 0.5 * k)
+            cr.set_line_width(max(1, r * 0.012))
+            cr.stroke()
+        cr.restore()
+
+    def draw_windup_key(self, cr, r):
+        """Easter egg (QOTSA): a wind-up key sticking out of the blob's side, turning faster
+        the louder it gets."""
+        k = self.qotsa
+        x0, y0 = self.x + r * 0.7, self.y - r * 0.05
+        turn = math.cos(self.key_spin * 2)                  # the bow seen turning edge-on
+        cr.save()
+        cr.set_source_rgba(0.6, 0.6, 0.65, k)
+        cr.rectangle(x0, y0 - r * 0.045, r * 0.6, r * 0.09)  # the shaft
+        cr.fill()
+        cr.translate(x0 + r * 0.7, y0)
+        for d in (-1, 1):                                  # the two wings of the bow
+            cr.save()
+            cr.scale(1, turn if abs(turn) > 0.08 else 0.08)
+            cr.arc(0, d * r * 0.17, r * 0.15, 0, TAU)
+            cr.restore()
+            cr.set_source_rgba(0.8, 0.62, 0.25, k)
+            cr.fill_preserve()
+            cr.set_source_rgba(0.3, 0.2, 0.05, k)
+            cr.set_line_width(max(1.2, r * 0.02))
+            cr.stroke()
+        cr.restore()
+
+    def draw_harlequin(self, cr, x, y, er):
+        """Easter egg (Marillion): jester's diamonds painted above and below one eye."""
+        k = self.marillion
+        cr.save()
+        for d in (-1, 1):
+            cy = y + d * er * 1.4
+            cr.move_to(x, cy - er * 0.55)
+            cr.line_to(x + er * 0.28, cy)
+            cr.line_to(x, cy + er * 0.55)
+            cr.line_to(x - er * 0.28, cy)
+            cr.close_path()
+        cr.set_source_rgba(0.1, 0.05, 0.2, 0.9 * k)
+        cr.fill()
+        cr.restore()
+
+    def draw_jester_hat(self, cr, r):
+        """Easter egg (Marillion): a jester's hat with three floppy points and bells that
+        swing with the motion and jingle on the hi-hats."""
+        k = self.marillion
+        x, y = self.x, self.y - r * 0.72 - self.squash * r * 0.25
+        sw = max(-1.0, min(1.0, -self.vx / 1000))
+        jig = self.jingle * math.sin(self.t * 60) * r * 0.03
+        cols = ((0.75, 0.08, 0.12), (0.12, 0.45, 0.2), (0.75, 0.08, 0.12))
+        cr.save()
+        tips = []
+        for i, (base_l, base_r, tip) in enumerate((
+                ((-0.75, 0.05), (-0.2, -0.05), (-1.25 + sw * 0.15, 0.35)),
+                ((-0.3, -0.05), (0.3, -0.05), (0.1 + sw * 0.25, -0.85)),
+                ((0.2, -0.05), (0.75, 0.05), (1.25 + sw * 0.15, 0.35)))):
+            bx0, by0 = x + base_l[0] * r, y + base_l[1] * r
+            bx1, by1 = x + base_r[0] * r, y + base_r[1] * r
+            tx, ty = x + tip[0] * r, y + tip[1] * r
+            mx, my = (bx0 + bx1) / 2, (by0 + by1) / 2
+            bend = r * (0.35 if i != 1 else 0.25)
+            cr.move_to(bx0, by0)
+            cr.curve_to(mx - bend * 0.3, my - bend * 1.2, tx - bend * 0.2, ty - bend * 0.5, tx, ty)
+            cr.curve_to(tx + bend * 0.1, ty - bend * 0.1, mx + bend * 0.2, my - bend * 0.6, bx1, by1)
+            cr.close_path()
+            cr.set_source_rgba(*cols[i], k)
+            cr.fill_preserve()
+            cr.set_source_rgba(0.1, 0.02, 0.05, k)
+            cr.set_line_width(max(1.2, r * 0.02))
+            cr.stroke()
+            tips.append((tx, ty))
+        # the band round the head
+        cr.move_to(x - r * 0.8, y + r * 0.08)
+        cr.curve_to(x - r * 0.3, y - r * 0.08, x + r * 0.3, y - r * 0.08, x + r * 0.8, y + r * 0.08)
+        cr.set_source_rgba(0.95, 0.78, 0.2, k)
+        cr.set_line_width(max(3, r * 0.12))
+        cr.set_line_cap(cairo.LINE_CAP_ROUND)
+        cr.stroke()
+        # bells
+        for j, (tx, ty) in enumerate(tips):
+            bx = tx + jig * (1 if j % 2 else -1)
+            by = ty + r * 0.06
+            g = cairo.RadialGradient(bx - r * 0.03, by - r * 0.03, 0, bx, by, r * 0.1)
+            g.add_color_stop_rgba(0, 1.0, 0.95, 0.6, k)
+            g.add_color_stop_rgba(1, 0.75, 0.55, 0.1, k)
+            cr.set_source(g)
+            cr.arc(bx, by, r * 0.09, 0, TAU)
+            cr.fill()
+            if self.jingle > 0.3:
+                cr.set_source_rgba(1, 0.95, 0.6, self.jingle * k)
+                cr.set_line_width(max(1, r * 0.015))
+                for a0 in (-0.6, 0.0, 0.6):
+                    cr.move_to(bx + math.cos(a0 - math.pi / 2) * r * 0.13, by + math.sin(a0 - math.pi / 2) * r * 0.13)
+                    cr.line_to(bx + math.cos(a0 - math.pi / 2) * r * 0.2, by + math.sin(a0 - math.pi / 2) * r * 0.2)
+                cr.stroke()
+        cr.restore()
+
+    def draw_flannel(self, cr, r):
+        """Easter egg (Pearl Jam): a red flannel shirt, open at the collar. Called with the
+        body as the clip."""
+        k = self.pearljam
+        top = self.y + r * 0.5
+        x = self.x
+        cr.save()
+        cr.rectangle(x - r * 2, top, r * 4, r * 2)
+        cr.clip()
+        cr.set_source_rgba(0.7, 0.1, 0.1, k)
+        cr.paint()
+        # tartan: wide dark bands and thin light lines both ways
+        step = r * 0.24
+        for i in range(-9, 10):
+            cr.rectangle(x + i * step, top, step * 0.4, r * 2)
+            cr.rectangle(x - r * 2, top + (i + 9) * step, r * 4, step * 0.4)
+        cr.set_source_rgba(0.08, 0.04, 0.04, 0.45 * k)
+        cr.fill()
+        for i in range(-9, 10):
+            cr.rectangle(x + i * step + step * 0.7, top, step * 0.06, r * 2)
+            cr.rectangle(x - r * 2, top + (i + 9) * step + step * 0.7, r * 4, step * 0.06)
+        cr.set_source_rgba(0.95, 0.85, 0.6, 0.45 * k)
+        cr.fill()
+        cr.reset_clip()
+        cr.restore()
+        cr.save()
+        # open collar and the button placket
+        for d in (-1, 1):
+            cr.move_to(x + d * r * 0.42, top - r * 0.03)
+            cr.line_to(x + d * r * 0.05, top + r * 0.05)
+            cr.line_to(x + d * r * 0.22, top + r * 0.3)
+            cr.close_path()
+        cr.set_source_rgba(0.55, 0.07, 0.07, k)
+        cr.fill_preserve()
+        cr.set_source_rgba(0.15, 0.02, 0.02, k)
+        cr.set_line_width(max(1, r * 0.015))
+        cr.stroke()
+        cr.move_to(x, top + r * 0.05)
+        cr.line_to(x, top + r)
+        cr.stroke()
+        for j in range(3):
+            cr.arc(x + r * 0.04, top + r * (0.25 + j * 0.2), r * 0.025, 0, TAU)
+            cr.set_source_rgba(0.9, 0.85, 0.75, k)
+            cr.fill()
+        cr.restore()
+
+    def draw_waves(self, cr, W, H, a):
+        """Easter egg (Pearl Jam): the ocean rolling in along the bottom of the screen,
+        swelling with the bass."""
+        k = self.pearljam
+        if k < 0.01:
+            return
+        t = self.t
+        swell = 1 + 0.6 * min(a.bass, 1.5)
+        cr.save()
+        for layer, (col, base, amp, spd, al) in enumerate((
+                ((0.1, 0.35, 0.55), 0.10, 0.025, 0.6, 0.35),
+                ((0.12, 0.5, 0.65), 0.07, 0.02, -0.9, 0.4),
+                ((0.2, 0.65, 0.75), 0.04, 0.015, 1.3, 0.45))):
+            pts = []
+            for i in range(41):
+                fx = i / 40
+                fy = (H * (1 - base * swell * k) -
+                      H * amp * swell * (math.sin(fx * 9 + t * spd + layer) +
+                                         0.5 * math.sin(fx * 17 - t * spd * 1.6)))
+                pts.append((fx * W, fy))
+            cr.move_to(0, H)
+            for px, py in pts:
+                cr.line_to(px, py)
+            cr.line_to(W, H)
+            cr.close_path()
+            cr.set_source_rgba(*col, al * k)
+            cr.fill()
+            # foam on the crest
+            for i, (px, py) in enumerate(pts):
+                (cr.move_to if i == 0 else cr.line_to)(px, py)
+            cr.set_source_rgba(0.92, 0.97, 1.0, 0.5 * al * k)
+            cr.set_line_width(2)
+            cr.stroke()
+        cr.restore()
+
     def draw_flash(self, cr):
         """Full-screen colour flash on a drop."""
         if self.flash > 0.01:
@@ -2890,6 +3233,8 @@ class Blob:
             drawn_eyes.append((ex_, ey_, er))
             if self.cure > 0.01:
                 self.draw_eyeliner(cr, ex_, ey_, er, r, i)
+            if self.marillion > 0.01 and i == 0:
+                self.draw_harlequin(cr, ex_, ey_, er)
             if self.wizard > 0.01:
                 g = cairo.RadialGradient(ex_, ey_, er * 0.8, ex_, ey_, er * 1.7)
                 flick = 0.85 + 0.15 * math.sin(self.t * 7 + i * 2)
@@ -2931,7 +3276,8 @@ class Blob:
                 self.draw_seed_of_life(cr, self.x, face_y - r * 0.5, r * 0.16 * s, self.tool)
             self.draw_eye(cr, self.x, face_y - r * 0.5, r * 0.16 * s, self.pupils[0], 0, a,
                           hue_eye=True, idx=2)
-        if self.heavy > 0.15 and self.tool < 0.5 and self.rage < 0.5 and self.nola < 0.5:
+        if (self.heavy > 0.15 and self.tool < 0.5 and self.rage < 0.5 and self.nola < 0.5
+                and self.marillion < 0.5):
             self.draw_pentagram(cr, self.x, face_y - r * 0.7, r * 0.2)
         elif self.nola > 0.01:
             self.draw_fleur_de_lis(cr, self.x, face_y - r * 0.7, r * 0.22)
@@ -3005,7 +3351,8 @@ class Blob:
         # era headwear, unless an easter egg already has something on (or growing out of) the head
         bare = 1 - max(self.korn, self.linkin, self.tool, self.horns, self.wright,
                        self.kurt * self.grunge, self.evil, self.rage, self.acid, self.nola,
-                       self.interpol, self.cure, self.wizard, self.doors)
+                       self.interpol, self.cure, self.wizard, self.doors, self.melvins,
+                       self.marillion)
         if self.era90 * bare > 0.01:
             self.draw_cap(cr, face_y, r, self.era90 * bare)
         if self.y2k * bare > 0.01:
@@ -3020,6 +3367,8 @@ class Blob:
             self.draw_cure_hair(cr, r)
         if self.doors > 0.01:
             self.draw_curls(cr, r)
+        if self.marillion > 0.01:
+            self.draw_jester_hat(cr, r)
         if self.layne > 0.01 and self.cool < 0.99:
             self.draw_round_glasses(cr, drawn_eyes, r, self.layne * (1 - self.cool))
         if self.kurt > 0.01 and self.cool < 0.99:
@@ -4039,6 +4388,10 @@ class Overlay(Gtk.Window):
         song = np_.doors_song
         self.blob.storm_target = 1.0 if song == "storm" else 0.0
         self.blob.fire_target = 1.0 if song == "fire" else 0.0
+        self.blob.melvins_target = 1.0 if np_.melvins else 0.0
+        self.blob.qotsa_target = 1.0 if np_.qotsa else 0.0
+        self.blob.marillion_target = 1.0 if np_.marillion else 0.0
+        self.blob.pearljam_target = 1.0 if np_.pearljam else 0.0
         self.queue_draw()
         return GLib.SOURCE_CONTINUE
 
@@ -4052,6 +4405,7 @@ class Overlay(Gtk.Window):
             self.draw_vignette(cr)
         self.blob.draw_desert_sun(cr, self.get_allocated_width(), self.get_allocated_height(), self.audio)
         self.blob.draw_storm(cr, self.get_allocated_width(), self.get_allocated_height())
+        self.blob.draw_waves(cr, self.get_allocated_width(), self.get_allocated_height(), self.audio)
         self.blob.draw_flash(cr)
         if self.show_scope:
             self.draw_scope(cr)

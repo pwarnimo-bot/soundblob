@@ -624,6 +624,16 @@ def nola_on(artists, title, album=""):
     return _plays_on(artists, title, album, {"down", "corrosion of conformity"})
 
 
+def interpol_on(artists, title, album=""):
+    """Is this Interpol (or Paul Banks solo / as Julian Plenti)?"""
+    return _plays_on(artists, title, album, {"interpol", "paul banks", "julian plenti"})
+
+
+def cure_on(artists, title, album=""):
+    """Is this The Cure (or Robert Smith's side projects)?"""
+    return _plays_on(artists, title, album, {"the cure", "robert smith", "the glove"})
+
+
 def garcia_on(artists, title, album=""):
     """Is John Garcia singing on this track?"""
     if any("john garcia" in a.lower() for a in artists):
@@ -748,7 +758,10 @@ class NowPlaying:
     drags it through the bayou: swamp-green, melting and dripping acid, draped in Spanish moss,
     bubbling inside, with black butterflies fluttering around that scatter when it gets loud.
     Down and Corrosion of Conformity grow it a big Southern beard, put a gold fleur-de-lis on
-    its forehead, turn it whiskey-brown and set it swaggering through a haze of smoke."""
+    its forehead, turn it whiskey-brown and set it swaggering through a haze of smoke. Interpol
+    dresses it in a sharp black suit and tie with slicked hair, dark red and composed, and The
+    Cure turns it pale with a huge backcombed tangle of black hair, running eyeliner and smeared
+    red lipstick."""
 
     BUS_NAME = "org.mpris.MediaPlayer2.spotify"
 
@@ -843,6 +856,14 @@ class NowPlaying:
     @property
     def nola(self):
         return self.playing and nola_on(self.artists, self.title, self.album)
+
+    @property
+    def interpol(self):
+        return self.playing and interpol_on(self.artists, self.title, self.album)
+
+    @property
+    def cure(self):
+        return self.playing and cure_on(self.artists, self.title, self.album)
 
     @property
     def garcia(self):
@@ -976,6 +997,13 @@ class Blob:
         self.nola_target = 0.0
         self.beard_sw = 0.0        # beard swing (spring), sideways
         self.beard_v = 0.0
+        self.interpol = 0.0        # easter egg: black suit and tie, slicked hair, dark red (Interpol)
+        self.interpol_target = 0.0
+        self.cure = 0.0            # easter egg: pale, wild black hair, eyeliner, lipstick (The Cure)
+        self.cure_target = 0.0
+        # The Cure's backcombed hair: (angle, length, kink) per strand, fixed so it doesn't flicker
+        self.cure_hair = [(random.uniform(-math.pi - 0.35, 0.35), random.uniform(0.3, 0.75),
+                           random.uniform(-0.6, 0.6)) for _ in range(46)]
         # era awareness (release year from MusicBrainz): the 90s and the early 2000s
         self.era90 = 0.0           # backwards cap, Memphis-pattern confetti, VHS camcorder overlay
         self.era90_target = 0.0
@@ -1038,6 +1066,8 @@ class Blob:
         self.kill = max(0.0, self.kill - dt)
         self.acid += (self.acid_target - self.acid) * min(1, dt * 1.2)
         self.nola += (self.nola_target - self.nola) * min(1, dt * 1.2)
+        self.interpol += (self.interpol_target - self.interpol) * min(1, dt * 1.2)
+        self.cure += (self.cure_target - self.cure) * min(1, dt * 1.2)
         self.era90 += (self.era90_target - self.era90) * min(1, dt * 1.5)
         self.y2k += (self.y2k_target - self.y2k) * min(1, dt * 1.5)
         self.scream = self.linkin * clamp01((self.grunge - 0.45) / 0.4)
@@ -1256,6 +1286,10 @@ class Blob:
             # Down / COC: whiskey amber and bourbon brown
             want = 0.075 + 0.015 * math.sin(self.t * 0.5)
             self.hue += (((want - self.hue) + 0.5) % 1.0 - 0.5) * self.nola * min(1, dt * 3)
+        if self.interpol > 0.01:
+            # Interpol: a muted, dark red, like the bright lights through a red filter
+            want = 0.985 + 0.01 * math.sin(self.t * 0.4)
+            self.hue += (((want - self.hue) + 0.5) % 1.0 - 0.5) * self.interpol * min(1, dt * 3)
         if self.tool > 0.01:
             # Tool: deep indigo and violet, the colours of the visionary art
             want = 0.72 + 0.06 * math.sin(self.t * 0.4)
@@ -1318,7 +1352,7 @@ class Blob:
 
     def dark(self, rgb, k=0.85):
         """Fade a colour toward DARK as the music gets heavy."""
-        t = max(self.heavy, 0.5 * self.nin, 0.3 * self.rage, 0.35 * self.acid, 0.3 * self.nola) * k   # egg palettes
+        t = max(self.heavy, 0.5 * self.nin, 0.3 * self.rage, 0.35 * self.acid, 0.3 * self.nola, 0.4 * self.interpol) * k   # egg palettes
         return tuple(c + (d - c) * t for c, d in zip(rgb, DARK))
 
     def emit(self, p):
@@ -1438,6 +1472,7 @@ class Blob:
         # jump height scales with the screen and the mood
         height = H * (0.18 + 0.22 * s / 2.5) * random.uniform(0.8, 1.15) * lerp(0.45, 1.4, m)
         height *= 1 + 0.4 * self.korn        # Korn: jump!
+        height *= 1 - 0.25 * self.interpol   # Interpol: composed, never showing off
         P = a.beat_period if synced else 0.0
         floor_y = H - r
         vy = None
@@ -1547,6 +1582,8 @@ class Blob:
         sat = lerp(0.6, 1.0, clamp01(self.mood * 2))
         sat *= 1 - 0.55 * self.layne      # Layne: washed-out, grungy colours
         sat *= 1 - 0.85 * self.nin        # NIN: nearly black and white
+        sat *= 1 - 0.35 * self.interpol   # Interpol: muted
+        sat *= 1 - 0.9 * self.cure        # The Cure: deathly pale
         if self.tool > 0.01:
             self.draw_mandala(cr, a, self.R)   # base size: the bass pulse is built in
 
@@ -1611,7 +1648,8 @@ class Blob:
             cr.scale(k, k)
             cr.translate(-self.x, -self.y)
             smooth_closed_path(cr, pts)
-            glow = hsv(self.hue + 0.5 * (1 - max(self.desert, self.tool, self.rage, self.acid, self.nola)), sat)  # on-palette
+            glow = hsv(self.hue + 0.5 * (1 - max(self.desert, self.tool, self.rage, self.acid, self.nola,
+                                                self.interpol)), sat)  # on-palette
             glow = tuple(lerp(c, d, self.heavy) for c, d in zip(glow, (0.75, 0.0, 0.05)))
             cr.set_source_rgba(*glow, al + a.level * 0.08 + self.crazy * 0.08)
             cr.fill()
@@ -1637,12 +1675,15 @@ class Blob:
             ang = self.spin * (1 if j % 2 else -0.7) + j * TAU / 6 + math.sin(at + j) * 0.5
             dist = r * (0.35 + 0.25 * math.sin(at * 1.3 + j * 2))
             sr = r * (0.18 + 0.12 * a.spectrum[(j * 5) % 32])
-            spot = (0.25 + j * 0.13) * (1 - 0.8 * max(self.desert, self.tool, self.rage, self.acid, 1.2 * self.nola))  # egg's hues
+            spot = (0.25 + j * 0.13) * (1 - 0.8 * max(self.desert, self.tool, self.rage, self.acid,
+                                                    1.2 * self.nola, self.interpol))  # egg hues
             cr.set_source_rgba(*self.dark(hsv(self.hue + spot, 0.9 * sat, 1), 0.9), 0.55)
             cr.arc(self.x + math.cos(ang) * dist, self.y + math.sin(ang) * dist, sr, 0, TAU)
             cr.fill()
         if self.acid > 0.01:
             self.draw_acid_bubbles(cr, a, r)
+        if self.interpol > 0.01:
+            self.draw_suit(cr, r)
         if self.nin > 0.01:
             self.draw_scanlines(cr, r)
         cr.restore()
@@ -2219,6 +2260,163 @@ class Blob:
         cr.fill()
         cr.restore()
 
+    def draw_suit(self, cr, r):
+        """Easter egg (Interpol): a black suit, white shirt and skinny black tie on the lower
+        body. Called with the body as the clip."""
+        k = self.interpol
+        top = self.y + r * 0.5
+        x = self.x
+        sway = max(-1.0, min(1.0, -self.vx / 1500)) * r * 0.08     # the tie swings a little
+        cr.save()
+        # jacket
+        cr.rectangle(x - r * 2, top, r * 4, r * 2)
+        cr.set_source_rgba(0.06, 0.06, 0.07, k)
+        cr.fill()
+        # shirt: a V down the front
+        cr.move_to(x - r * 0.3, top - r * 0.02)
+        cr.line_to(x + r * 0.3, top - r * 0.02)
+        cr.line_to(x, top + r * 0.75)
+        cr.close_path()
+        cr.set_source_rgba(0.95, 0.95, 0.94, k)
+        cr.fill()
+        # collar points
+        for d in (-1, 1):
+            cr.move_to(x + d * r * 0.3, top - r * 0.02)
+            cr.line_to(x + d * r * 0.04, top + r * 0.04)
+            cr.line_to(x + d * r * 0.17, top + r * 0.2)
+            cr.close_path()
+        cr.set_source_rgba(1, 1, 1, k)
+        cr.fill_preserve()
+        cr.set_source_rgba(0.6, 0.6, 0.62, k)
+        cr.set_line_width(max(1, r * 0.012))
+        cr.stroke()
+        # skinny tie: knot, then the blade
+        cr.move_to(x - r * 0.05, top + r * 0.02)
+        cr.line_to(x + r * 0.05, top + r * 0.02)
+        cr.line_to(x + r * 0.035, top + r * 0.1)
+        cr.line_to(x - r * 0.035, top + r * 0.1)
+        cr.close_path()
+        cr.move_to(x - r * 0.03, top + r * 0.1)
+        cr.line_to(x + r * 0.03, top + r * 0.1)
+        cr.line_to(x + r * 0.055 + sway, top + r * 0.62)
+        cr.line_to(x + sway, top + r * 0.7)
+        cr.line_to(x - r * 0.055 + sway, top + r * 0.62)
+        cr.close_path()
+        cr.set_source_rgba(0.02, 0.02, 0.02, k)
+        cr.fill()
+        # lapel edges, catching the light
+        cr.set_source_rgba(0.35, 0.35, 0.38, k)
+        cr.set_line_width(max(1.2, r * 0.02))
+        for d in (-1, 1):
+            cr.move_to(x + d * r * 0.42, top - r * 0.05)
+            cr.line_to(x + d * r * 0.3, top + r * 0.18)
+            cr.line_to(x + d * r * 0.38, top + r * 0.24)
+            cr.line_to(x + d * r * 0.03, top + r * 0.78)
+        cr.stroke()
+        cr.restore()
+
+    def draw_slick_hair(self, cr, r):
+        """Easter egg (Interpol): glossy black hair, slicked back with a sharp side part."""
+        k = self.interpol
+        x, y = self.x, self.y
+        cr.save()
+        cr.new_path()
+        cr.arc(x, y, r * 1.03, math.pi + 0.35, TAU - 0.3)
+        cr.curve_to(x + r * 0.75, y - r * 0.55, x + r * 0.2, y - r * 0.75, x - r * 0.3, y - r * 0.72)
+        cr.curve_to(x - r * 0.55, y - r * 0.7, x - r * 0.8, y - r * 0.5, x - r * 0.97, y - r * 0.35)
+        cr.close_path()
+        g = cairo.LinearGradient(x - r, y - r, x + r, y - r * 0.5)
+        g.add_color_stop_rgba(0, 0.12, 0.12, 0.14, k)
+        g.add_color_stop_rgba(1, 0.02, 0.02, 0.03, k)
+        cr.set_source(g)
+        cr.fill()
+        # the part, and the shine of the pomade
+        cr.set_line_cap(cairo.LINE_CAP_ROUND)
+        cr.set_source_rgba(0.55, 0.5, 0.5, 0.8 * k)
+        cr.set_line_width(max(1.2, r * 0.018))
+        cr.move_to(x - r * 0.4, y - r * 0.9)
+        cr.curve_to(x - r * 0.4, y - r * 0.84, x - r * 0.37, y - r * 0.78, x - r * 0.32, y - r * 0.74)
+        cr.stroke()
+        cr.set_source_rgba(1, 1, 1, 0.45 * k)
+        cr.set_line_width(max(1.5, r * 0.035))
+        cr.move_to(x - r * 0.15, y - r * 0.95)
+        cr.curve_to(x + r * 0.15, y - r * 0.98, x + r * 0.45, y - r * 0.88, x + r * 0.62, y - r * 0.72)
+        cr.stroke()
+        cr.restore()
+
+    def draw_eyeliner(self, cr, x, y, er, r, idx):
+        """Easter egg (The Cure): heavy black eyeliner, smudged all round and running down."""
+        k = self.cure
+        cr.save()
+        g = cairo.RadialGradient(x, y, er * 0.9, x, y, er * 1.5)
+        g.add_color_stop_rgba(0, 0.03, 0.02, 0.04, 0.9 * k)
+        g.add_color_stop_rgba(1, 0.03, 0.02, 0.04, 0)
+        cr.set_source(g)
+        cr.arc(x, y, er * 1.5, 0, TAU)
+        cr.fill()
+        # runs: one or two streaks down the cheek, swaying slightly
+        cr.set_line_cap(cairo.LINE_CAP_ROUND)
+        for j, (dx, ln) in enumerate(((-0.35, 0.55), (0.25, 0.35))[:2 - idx]):
+            x0 = x + dx * er
+            y0 = y + er * 0.85
+            l = er * ln * 2.2
+            cr.move_to(x0, y0)
+            cr.curve_to(x0 + er * 0.05, y0 + l * 0.4, x0 - er * 0.06, y0 + l * 0.7,
+                        x0 + math.sin(self.t * 0.8 + j) * er * 0.05, y0 + l)
+            cr.set_source_rgba(0.04, 0.03, 0.05, 0.75 * k)
+            cr.set_line_width(max(1.5, er * 0.14 * (1 - 0.3 * j)))
+            cr.stroke()
+        cr.restore()
+
+    def draw_lipstick(self, cr, mouth, r):
+        """Easter egg (The Cure): red lipstick, smeared well past the lips."""
+        k = self.cure
+        cr.save()
+        cr.set_line_join(cairo.LINE_JOIN_ROUND)
+        # the smear: a wider, fainter, offset copy
+        cr.translate(r * 0.035, r * 0.025)
+        cr.append_path(mouth)
+        cr.set_source_rgba(0.8, 0.04, 0.12, 0.45 * k)
+        cr.set_line_width(max(5, r * 0.13))
+        cr.stroke()
+        cr.translate(-r * 0.035, -r * 0.025)
+        cr.append_path(mouth)
+        cr.set_source_rgba(0.85, 0.02, 0.1, 0.95 * k)
+        cr.set_line_width(max(3, r * 0.07))
+        cr.stroke()
+        cr.restore()
+
+    def draw_cure_hair(self, cr, r):
+        """Easter egg (The Cure): a huge, backcombed tangle of black hair sticking out every
+        which way, bouncing with the blob."""
+        k = self.cure
+        x, y = self.x, self.y
+        bob = self.squash * r * 0.4 + self.nod * r * 0.08
+        cr.save()
+        cr.set_line_cap(cairo.LINE_CAP_ROUND)
+        # the mass on top
+        cr.set_source_rgba(0.04, 0.03, 0.05, k)
+        for j in range(13):
+            ang = math.pi + j / 12 * math.pi
+            cr.new_sub_path()
+            cr.arc(x + math.cos(ang) * r * 0.92, y + math.sin(ang) * r * 0.88,
+                   r * (0.2 + 0.05 * (j % 3)), 0, TAU)
+        cr.fill()
+        # strands sticking out
+        for i, (ang, ln, kink) in enumerate(self.cure_hair):
+            ca, sa = math.cos(ang), math.sin(ang)
+            x0, y0 = x + ca * r * 0.85, y + sa * r * 0.82
+            l = r * ln * (1 + 0.15 * math.sin(self.t * 2 + i))
+            ex, ey = x0 + ca * l, y0 + sa * l - abs(ca) * bob * ln
+            mx = (x0 + ex) / 2 - sa * kink * l * 0.5
+            my = (y0 + ey) / 2 + ca * kink * l * 0.5
+            cr.move_to(x0, y0)
+            cr.curve_to(mx, my, mx, my, ex, ey)
+            cr.set_source_rgba(0.04, 0.03, 0.05, k)
+            cr.set_line_width(max(1.5, r * (0.025 + 0.02 * (i % 3))))
+            cr.stroke()
+        cr.restore()
+
     def draw_flash(self, cr):
         """Full-screen colour flash on a drop."""
         if self.flash > 0.01:
@@ -2292,6 +2490,8 @@ class Blob:
             ey_ = face_y + ey * r
             er = r * 0.27 * es * grow
             drawn_eyes.append((ex_, ey_, er))
+            if self.cure > 0.01:
+                self.draw_eyeliner(cr, ex_, ey_, er, r, i)
             self.draw_eye(cr, ex_, ey_, er, p, lid, a, idx=i)
             if xeyes > 0.02:
                 d = er * 0.6
@@ -2364,6 +2564,7 @@ class Blob:
             cr.line_to(x, my + (u - 0.5) * tilt + bend(u)
                        - math.sin(u * math.pi) * mh * (0.25 + yawn_open * 0.6))
         cr.close_path()
+        mouth = cr.copy_path()
         cr.set_source_rgba(0.15, 0, 0.12, 0.95)
         cr.fill_preserve()
         cr.clip()
@@ -2387,6 +2588,8 @@ class Blob:
                 cr.fill()
         cr.restore()
 
+        if self.cure > 0.01:
+            self.draw_lipstick(cr, mouth, r)
         if xeyes > 0.02:
             self.draw_tongue(cr, self.x + mw * 0.3, my + mh * 0.5, r, xeyes)
         if self.scream > 0.05:
@@ -2395,7 +2598,8 @@ class Blob:
             self.draw_headphones(cr, face_y, r)
         # era headwear, unless an easter egg already has something on (or growing out of) the head
         bare = 1 - max(self.korn, self.linkin, self.tool, self.horns, self.wright,
-                       self.kurt * self.grunge, self.evil, self.rage, self.acid, self.nola)
+                       self.kurt * self.grunge, self.evil, self.rage, self.acid, self.nola,
+                       self.interpol, self.cure)
         if self.era90 * bare > 0.01:
             self.draw_cap(cr, face_y, r, self.era90 * bare)
         if self.y2k * bare > 0.01:
@@ -2404,6 +2608,10 @@ class Blob:
             self.draw_bandana(cr, face_y, my, mh, r)
         if self.nola > 0.01:
             self.draw_beard(cr, my, mw, mh, r)
+        if self.interpol > 0.01:
+            self.draw_slick_hair(cr, r)
+        if self.cure > 0.01:
+            self.draw_cure_hair(cr, r)
         if self.layne > 0.01 and self.cool < 0.99:
             self.draw_round_glasses(cr, drawn_eyes, r, self.layne * (1 - self.cool))
         if self.kurt > 0.01 and self.cool < 0.99:
@@ -3378,6 +3586,8 @@ class Overlay(Gtk.Window):
         self.blob.rage_target = 1.0 if np_.rage else 0.0
         self.blob.acid_target = 1.0 if np_.acid_bath else 0.0
         self.blob.nola_target = 1.0 if np_.nola else 0.0
+        self.blob.interpol_target = 1.0 if np_.interpol else 0.0
+        self.blob.cure_target = 1.0 if np_.cure else 0.0
         self.queue_draw()
         return GLib.SOURCE_CONTINUE
 

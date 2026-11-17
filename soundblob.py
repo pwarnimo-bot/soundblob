@@ -11,13 +11,18 @@ r"""
 soundblob — a colorful, weird, googly-eyed blob that bounces around your
 desktop to whatever music is playing.
 
-* Captures system audio from the default sink monitor (PulseAudio/PipeWire via parec)
+* Captures system audio: the default sink monitor on Linux (PulseAudio/PipeWire via
+  parec), WASAPI loopback of the default output on Windows (PyAudioWPatch)
 * FFT + beat detection -> jumps, squish, spectrum-shaped wobble, particle bursts
-* Transparent, click-through Wayland layer-shell overlay (sway/wlroots)
+* Transparent, click-through overlay: Wayland layer-shell on Linux (sway/wlroots), a
+  layered always-on-top window on Windows
 
-Quit with Ctrl+C in the terminal, or: pkill -f '^python3 \S*soundblob\.py( |$)'
+Linux: quit with Ctrl+C in the terminal, or: pkill -f '^python3 \S*soundblob\.py( |$)'
 Toggle the FPS readout: pkill -USR1 -f '^python3 \S*soundblob\.py( |$)'
 Toggle the oscilloscope: pkill -USR2 -f '^python3 \S*soundblob\.py( |$)'
+
+Windows: quit with Ctrl+C in the terminal or Ctrl+Alt+Shift+Q. Ctrl+Alt+Shift+F toggles
+the FPS readout, Ctrl+Alt+Shift+O the oscilloscope.
 """
 import argparse
 import collections
@@ -37,17 +42,26 @@ import urllib.request
 
 import numpy as np
 import cairo
-import gi
 
-gi.require_version("Gtk", "3.0")
-gi.require_version("Gdk", "3.0")
-from gi.repository import Gtk, Gdk, GLib, Gio  # noqa: E402
+IS_WINDOWS = sys.platform == "win32"
+if IS_WINDOWS:
+    Gtk = Gdk = GLib = Gio = GtkLayerShell = None
+else:
+    import gi
 
-try:
-    gi.require_version("GtkLayerShell", "0.1")
-    from gi.repository import GtkLayerShell  # noqa: E402
-except (ValueError, ImportError):
-    GtkLayerShell = None
+    gi.require_version("Gtk", "3.0")
+    gi.require_version("Gdk", "3.0")
+    from gi.repository import Gtk, Gdk, GLib, Gio  # noqa: E402
+
+    try:
+        gi.require_version("GtkLayerShell", "0.1")
+        from gi.repository import GtkLayerShell  # noqa: E402
+    except (ValueError, ImportError):
+        GtkLayerShell = None
+
+# cairo's "toy" font names: fontconfig aliases on Linux, real family names on Windows
+FONT_SANS = "Segoe UI" if IS_WINDOWS else "Sans"
+FONT_MONO = "Consolas" if IS_WINDOWS else "Monospace"
 
 RATE = 44100
 CHUNK = 512          # samples per read (~11.6 ms)
@@ -143,9 +157,33 @@ class Onsets:
         return len(self.times) / 3.0
 
 
+class Resampler:
+    """Linear-interpolating stream resampler from a device's rate to RATE, handing out
+    CHUNK-sized pieces (WASAPI devices usually run at 48 kHz, the analyzer at 44.1 kHz)."""
+
+    def __init__(self, src_rate, chunk=CHUNK):
+        self.step = src_rate / RATE
+        self.chunk = chunk
+        self.buf = np.zeros(0, dtype=np.float32)
+        self.pos = 0.0
+
+    def feed(self, x):
+        self.buf = np.concatenate((self.buf, x))
+        while len(self.buf) >= self.pos + (self.chunk - 1) * self.step + 2:
+            at = self.pos + np.arange(self.chunk) * self.step
+            i = at.astype(np.int64)
+            f = (at - i).astype(np.float32)
+            yield self.buf[i] * (1 - f) + self.buf[i + 1] * f
+            self.pos += self.chunk * self.step
+            drop = int(self.pos)
+            self.buf = self.buf[drop:]
+            self.pos -= drop
+
+
 class Audio(threading.Thread):
-    """Reads the sink monitor and publishes band energies, drum hits, tempo,
-    song-structure events (breakdowns / drops) and an overall 'energy' mood."""
+    """Reads the system's audio output (the sink monitor on Linux, WASAPI loopback on
+    Windows) and publishes band energies, drum hits, tempo, song-structure events
+    (breakdowns / drops) and an overall 'energy' mood."""
 
     def __init__(self, device):
         super().__init__(daemon=True)
@@ -228,6 +266,12 @@ class Audio(threading.Thread):
         self.running = True
 
     def run(self):
+        if IS_WINDOWS:
+            self._run_wasapi()
+        else:
+            self._run_parec()
+
+    def _run_parec(self):
         while self.running:
             try:
                 proc = subprocess.Popen(
@@ -245,6 +289,62 @@ class Audio(threading.Thread):
                 self.process(np.frombuffer(data, dtype=np.float32))
             proc.kill()
             time.sleep(0.5)  # restart if parec died (e.g. sink changed)
+
+    def _run_wasapi(self):
+        """Windows: record what the speakers play through WASAPI loopback. `device` picks an
+        output by (part of) its name; empty means the default output. Loopback delivers
+        nothing at all while nothing plays, so silence is fed in then, in real time."""
+        try:
+            import pyaudiowpatch as pyaudio
+        except ImportError:
+            print("audio capture needs PyAudioWPatch: pip install PyAudioWPatch", file=sys.stderr)
+            return
+        while self.running:
+            pa = pyaudio.PyAudio()
+            stream = None
+            try:
+                dev = None
+                if self.device:
+                    for d in pa.get_loopback_device_info_generator():
+                        if self.device.lower() in d["name"].lower():
+                            dev = d
+                            break
+                    if dev is None:
+                        print(f"no output device matching {self.device!r}; using the default",
+                              file=sys.stderr)
+                if dev is None:
+                    dev = pa.get_default_wasapi_loopback()
+                ch = int(dev["maxInputChannels"])
+                sr = int(dev["defaultSampleRate"])
+                n = max(64, int(CHUNK * sr / RATE))
+                stream = pa.open(format=pyaudio.paFloat32, channels=ch, rate=sr, input=True,
+                                 input_device_index=dev["index"], frames_per_buffer=n)
+                rs = Resampler(sr)
+                quiet = np.zeros(CHUNK, dtype=np.float32)
+                last_data = next_quiet = time.monotonic()
+                while self.running:
+                    if stream.get_read_available() >= n:
+                        data = stream.read(n, exception_on_overflow=False)
+                        x = np.frombuffer(data, dtype=np.float32).reshape(-1, ch).mean(axis=1)
+                        for piece in rs.feed(x):
+                            self.process(piece)
+                        last_data = next_quiet = time.monotonic()
+                        continue
+                    now = time.monotonic()
+                    if now - last_data > 0.1 and now >= next_quiet:
+                        self.process(quiet)
+                        next_quiet = max(next_quiet + CHUNK / RATE, now - 0.1)
+                    time.sleep(0.002)
+            except Exception as e:      # device unplugged, exclusive mode, driver hiccup...
+                print(f"audio capture: {e}", file=sys.stderr)
+            finally:
+                if stream is not None:
+                    try:
+                        stream.close()
+                    except Exception:
+                        pass
+                pa.terminate()
+            time.sleep(1.0)  # and try again
 
     def process(self, samples):
         now = time.monotonic()
@@ -824,9 +924,13 @@ class NowPlaying:
     and flames for Light My Fire. The Melvins give it King Buzzo's giant grey fro and a robe
     printed with eyes, Queens of the Stone Age turn it into a clockwork wind-up toy, Marillion
     put it in a jester's hat with bells and harlequin face paint, and Pearl Jam dress it in
-    flannel with the ocean rolling in along the bottom of the screen. Faith No More (and Mike Patton's other bands) leave a fish
-    flopping on the floor beside it and snap its colours around like Patton switching genres,
-    and Mr. Bungle give it a squishy clown nose, a party hat and carnival balloons."""
+    flannel with the ocean rolling in along the bottom of the screen. Faith No More (and Mike
+    Patton's other bands) leave a fish flopping on the floor beside it and snap its colours
+    around like Patton switching genres, and Mr. Bungle give it a squishy clown nose, a party
+    hat and carnival balloons.
+
+    On Windows there's no MPRIS: it asks the system media controls (SMTC) instead, which
+    Spotify reports to, preferring Spotify's session when several apps are playing."""
 
     BUS_NAME = "org.mpris.MediaPlayer2.spotify"
 
@@ -837,6 +941,9 @@ class NowPlaying:
         self.playing = False
         self.dates = ReleaseDates(lookup_dates)
         self.track_start = time.monotonic()   # for the VHS counter
+        if IS_WINDOWS:
+            threading.Thread(target=self._smtc_worker, daemon=True).start()
+            return
         try:
             self.bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
         except GLib.Error:
@@ -861,12 +968,62 @@ class NowPlaying:
 
     def _on_metadata(self, conn, res):
         md = self._get(conn, res) or {}
-        artists = list(md.get("xesam:artist") or [])
-        title = md.get("xesam:title") or ""
+        self._set_track(list(md.get("xesam:artist") or []), md.get("xesam:title") or "",
+                        md.get("xesam:album") or "")
+
+    def _set_track(self, artists, title, album):
         if (artists, title) != (self.artists, self.title):
             self.track_start = time.monotonic()
         self.artists, self.title = artists, title
-        self.album = md.get("xesam:album") or ""
+        self.album = album
+
+    def _smtc_worker(self):
+        """Windows: poll the system media controls every couple of seconds."""
+        try:
+            import asyncio
+            from winrt.windows.media.control import (
+                GlobalSystemMediaTransportControlsSessionManager as Manager,
+                GlobalSystemMediaTransportControlsSessionPlaybackStatus as Status)
+        except ImportError:
+            print("easter eggs need the song name: pip install winrt-Windows.Media.Control "
+                  "winrt-Windows.Foundation winrt-Windows.Foundation.Collections", file=sys.stderr)
+            return
+
+        async def fetch(manager):
+            session = None
+            sessions = manager.get_sessions()
+            for i in range(sessions.size):
+                s = sessions.get_at(i)
+                if "spotify" in (s.source_app_user_model_id or "").lower():
+                    session = s
+                    break
+            session = session or manager.get_current_session()
+            if session is None:
+                return None
+            props = await session.try_get_media_properties_async()
+            playing = session.get_playback_info().playback_status == Status.PLAYING
+            return props.artist or "", props.title or "", props.album_title or "", playing
+
+        loop = asyncio.new_event_loop()
+        manager = None
+        while True:
+            try:
+                if manager is None:
+                    manager = loop.run_until_complete(Manager.request_async())
+                got = loop.run_until_complete(fetch(manager))
+            except Exception:
+                manager, got = None, None
+            if got is None:
+                self._set_track([], "", "")
+                self.playing = False
+            else:
+                artist, title, album, playing = got
+                # SMTC joins several artists into one string: match the whole and each part
+                parts = [a.strip() for a in artist.split(",")]
+                artists = [artist] + [a for a in parts if a and a != artist] if artist else []
+                self._set_track(artists, title, album)
+                self.playing = playing
+            time.sleep(2)
 
     def _on_status(self, conn, res):
         self.playing = self._get(conn, res) == "Playing"
@@ -3561,7 +3718,7 @@ class Blob:
             self.ember = None
 
         if sleepy > 0.8:
-            cr.select_font_face("Sans", cairo.FONT_SLANT_ITALIC, cairo.FONT_WEIGHT_BOLD)
+            cr.select_font_face(FONT_SANS, cairo.FONT_SLANT_ITALIC, cairo.FONT_WEIGHT_BOLD)
             for i in range(3):
                 ph = (self.t * 0.5 + i / 3) % 1
                 cr.set_font_size(r * (0.2 + ph * 0.25))
@@ -4511,62 +4668,31 @@ class Blob:
 
 
 # --------------------------------------------------------------------------- window
-class Overlay(Gtk.Window):
+class Stage:
+    """Everything that's drawn, independent of the window toolkit: the blob, the
+    full-screen effects and the readouts. A window calls tick() once per frame and draw()
+    with a cairo context covering the screen."""
+
     def __init__(self, args, audio):
-        super().__init__(title="soundblob")
         self.audio = audio
         self.blob = Blob(args.size, confetti=args.confetti)
         self.now_playing = NowPlaying(lookup_dates=not args.no_lookup)
         self.released = None
-        self.last_time = None
-        # FPS counter: frames actually drawn, averaged over half-second windows
+        self.W, self.H = 0, 0
         self.show_fps = not args.no_fps
         self.show_scope = not args.no_scope
         self.show_vignette = not args.no_vignette
         self._vignette = None      # (W, H, surface): the gradient is rendered once per size
         self.scope_gain = 0.0
+        # FPS counter: frames actually drawn, averaged over half-second windows
         self.fps = 0.0
         self.draw_ms = 0.0
         self._fps_frames = 0
         self._fps_draw = 0.0
         self._fps_since = time.perf_counter()
 
-        screen = self.get_screen()
-        visual = screen.get_rgba_visual()
-        if visual is not None:
-            self.set_visual(visual)
-        self.set_app_paintable(True)
-
-        if GtkLayerShell is not None and GtkLayerShell.is_supported():
-            GtkLayerShell.init_for_window(self)
-            GtkLayerShell.set_namespace(self, "soundblob")
-            layer = {"overlay": GtkLayerShell.Layer.OVERLAY, "top": GtkLayerShell.Layer.TOP,
-                     "bottom": GtkLayerShell.Layer.BOTTOM}[args.layer]
-            GtkLayerShell.set_layer(self, layer)
-            for edge in (GtkLayerShell.Edge.TOP, GtkLayerShell.Edge.BOTTOM,
-                         GtkLayerShell.Edge.LEFT, GtkLayerShell.Edge.RIGHT):
-                GtkLayerShell.set_anchor(self, edge, True)
-            GtkLayerShell.set_exclusive_zone(self, -1)
-            GtkLayerShell.set_keyboard_mode(self, GtkLayerShell.KeyboardMode.NONE)
-        else:
-            print("layer-shell not available; falling back to a fullscreen window", file=sys.stderr)
-            self.set_decorated(False)
-            self.fullscreen()
-
-        self.connect("draw", self.on_draw)
-        self.connect("realize", self.on_realize)
-        self.connect("destroy", Gtk.main_quit)
-        self.add_tick_callback(self.on_tick)
-
-    def on_realize(self, *_):
-        # empty input region => completely click-through
-        self.input_shape_combine_region(cairo.Region())
-
-    def on_tick(self, widget, clock):
-        now = clock.get_frame_time() / 1e6
-        dt = 1 / 60 if self.last_time is None else min(now - self.last_time, 1 / 20)
-        self.last_time = now
-        W, H = self.get_allocated_width(), self.get_allocated_height()
+    def tick(self, dt, W, H):
+        self.W, self.H = W, H
         if W > 1 and H > 1:
             # 2 substeps for stable bounces
             for _ in range(2):
@@ -4603,10 +4729,8 @@ class Overlay(Gtk.Window):
         self.blob.pearljam_target = 1.0 if np_.pearljam else 0.0
         self.blob.fnm_target = 1.0 if np_.fnm else 0.0
         self.blob.bungle_target = 1.0 if np_.bungle else 0.0
-        self.queue_draw()
-        return GLib.SOURCE_CONTINUE
 
-    def on_draw(self, widget, cr):
+    def draw(self, cr):
         t0 = time.perf_counter()
         cr.set_operator(cairo.OPERATOR_SOURCE)
         cr.set_source_rgba(0, 0, 0, 0)
@@ -4614,9 +4738,9 @@ class Overlay(Gtk.Window):
         cr.set_operator(cairo.OPERATOR_OVER)
         if self.show_vignette:
             self.draw_vignette(cr)
-        self.blob.draw_desert_sun(cr, self.get_allocated_width(), self.get_allocated_height(), self.audio)
-        self.blob.draw_storm(cr, self.get_allocated_width(), self.get_allocated_height())
-        self.blob.draw_waves(cr, self.get_allocated_width(), self.get_allocated_height(), self.audio)
+        self.blob.draw_desert_sun(cr, self.W, self.H, self.audio)
+        self.blob.draw_storm(cr, self.W, self.H)
+        self.blob.draw_waves(cr, self.W, self.H, self.audio)
         self.blob.draw_flash(cr)
         if self.show_scope:
             self.draw_scope(cr)
@@ -4631,7 +4755,6 @@ class Overlay(Gtk.Window):
             self.fps = self._fps_frames / (t1 - self._fps_since)
             self.draw_ms = self._fps_draw / self._fps_frames * 1000
             self._fps_frames, self._fps_draw, self._fps_since = 0, 0.0, t1
-        return False
 
     def draw_era_stamp(self, cr):
         """90s songs get a VHS camcorder overlay (PLAY, tape counter, recording date); early-2000s
@@ -4640,7 +4763,7 @@ class Overlay(Gtk.Window):
         b = self.blob
         if (b.era90 < 0.01 and b.y2k < 0.01) or not self.released:
             return
-        W, H = self.get_allocated_width(), self.get_allocated_height()
+        W, H = self.W, self.H
         parts = self.released.split("-")
         year = parts[0]
         month = int(parts[1]) if len(parts) > 1 else 0
@@ -4648,7 +4771,7 @@ class Overlay(Gtk.Window):
         fs = max(14, H * 0.032)
         pad = fs * 1.2
         cr.save()
-        cr.select_font_face("Monospace", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
+        cr.select_font_face(FONT_MONO, cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
         cr.set_font_size(fs)
 
         def text(x, y, s, rgb, a, right=False):
@@ -4702,7 +4825,7 @@ class Overlay(Gtk.Window):
         h = self.blob.heavy
         if h < 0.01:
             return
-        W, H = self.get_allocated_width(), self.get_allocated_height()
+        W, H = self.W, self.H
         if self._vignette is None or self._vignette[:2] != (W, H):
             # a full-screen gradient is expensive in cairo, so render it once and reuse it
             surf = cairo.ImageSurface(cairo.FORMAT_ARGB32, W, H)
@@ -4722,7 +4845,7 @@ class Overlay(Gtk.Window):
 
     def draw_scope(self, cr):
         """Oscilloscope: the latest ~23 ms of audio as a rainbow line across the middle."""
-        W, H = self.get_allocated_width(), self.get_allocated_height()
+        W, H = self.W, self.H
         buf = self.audio.buf                      # grab the reference once (audio thread swaps it)
         n = SCOPE_SAMPLES
         # trigger on the latest rising zero crossing that still leaves n samples,
@@ -4760,9 +4883,9 @@ class Overlay(Gtk.Window):
 
     def draw_fps(self, cr):
         """Small readout in the bottom-right corner: fps, CPU draw time, confetti count."""
-        W, H = self.get_allocated_width(), self.get_allocated_height()
+        W, H = self.W, self.H
         text = f"{self.fps:3.0f} fps  {self.draw_ms:4.1f} ms  {len(self.blob.particles):3d} confetti"
-        cr.select_font_face("monospace", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
+        cr.select_font_face(FONT_MONO, cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
         cr.set_font_size(13)
         ext = cr.text_extents(text)
         pad = 7
@@ -4788,14 +4911,282 @@ class Overlay(Gtk.Window):
         cr.show_text(text)
 
 
+if Gtk is not None:
+    class GtkOverlay(Gtk.Window):
+        """Linux: a transparent, click-through layer-shell surface over the whole output."""
+
+        def __init__(self, args, stage):
+            super().__init__(title="soundblob")
+            self.stage = stage
+            self.last_time = None
+            screen = self.get_screen()
+            visual = screen.get_rgba_visual()
+            if visual is not None:
+                self.set_visual(visual)
+            self.set_app_paintable(True)
+
+            if GtkLayerShell is not None and GtkLayerShell.is_supported():
+                GtkLayerShell.init_for_window(self)
+                GtkLayerShell.set_namespace(self, "soundblob")
+                layer = {"overlay": GtkLayerShell.Layer.OVERLAY, "top": GtkLayerShell.Layer.TOP,
+                         "bottom": GtkLayerShell.Layer.BOTTOM}[args.layer]
+                GtkLayerShell.set_layer(self, layer)
+                for edge in (GtkLayerShell.Edge.TOP, GtkLayerShell.Edge.BOTTOM,
+                             GtkLayerShell.Edge.LEFT, GtkLayerShell.Edge.RIGHT):
+                    GtkLayerShell.set_anchor(self, edge, True)
+                GtkLayerShell.set_exclusive_zone(self, -1)
+                GtkLayerShell.set_keyboard_mode(self, GtkLayerShell.KeyboardMode.NONE)
+            else:
+                print("layer-shell not available; falling back to a fullscreen window",
+                      file=sys.stderr)
+                self.set_decorated(False)
+                self.fullscreen()
+
+            self.connect("draw", self.on_draw)
+            self.connect("realize", self.on_realize)
+            self.connect("destroy", Gtk.main_quit)
+            self.add_tick_callback(self.on_tick)
+
+        def on_realize(self, *_):
+            # empty input region => completely click-through
+            self.input_shape_combine_region(cairo.Region())
+
+        def on_tick(self, widget, clock):
+            now = clock.get_frame_time() / 1e6
+            dt = 1 / 60 if self.last_time is None else min(now - self.last_time, 1 / 20)
+            self.last_time = now
+            self.stage.tick(dt, self.get_allocated_width(), self.get_allocated_height())
+            self.queue_draw()
+            return GLib.SOURCE_CONTINUE
+
+        def on_draw(self, widget, cr):
+            self.stage.draw(cr)
+            return False
+
+
+class Win32Overlay:
+    """Windows: a borderless, click-through, layered window over the primary monitor. The
+    stage is drawn with cairo straight into the window's DIB section (cairo's premultiplied
+    ARGB32 is exactly what UpdateLayeredWindow wants) and pushed to the screen each frame.
+    Global hotkeys: Ctrl+Alt+Shift+F (FPS readout), +O (oscilloscope), +Q (quit)."""
+
+    FRAME = 1 / 60
+    HOTKEYS = {1: "F", 2: "O", 3: "Q"}
+
+    def __init__(self, stage, args):
+        import ctypes
+        from ctypes import wintypes as wt
+        self.ct, self.wt = ctypes, wt
+        self.stage, self.layer = stage, args.layer
+        self.running = True
+        self.surface = None
+        self._resize = False
+        u32, g32 = ctypes.windll.user32, ctypes.windll.gdi32
+        self.u32, self.g32 = u32, g32
+        H_ = wt.HANDLE
+        LRESULT = ctypes.c_ssize_t
+        self.WNDPROC = ctypes.WINFUNCTYPE(LRESULT, wt.HWND, wt.UINT, wt.WPARAM, wt.LPARAM)
+
+        class WNDCLASSEXW(ctypes.Structure):
+            _fields_ = [("cbSize", wt.UINT), ("style", wt.UINT), ("lpfnWndProc", self.WNDPROC),
+                        ("cbClsExtra", ctypes.c_int), ("cbWndExtra", ctypes.c_int),
+                        ("hInstance", H_), ("hIcon", H_), ("hCursor", H_), ("hbrBackground", H_),
+                        ("lpszMenuName", wt.LPCWSTR), ("lpszClassName", wt.LPCWSTR), ("hIconSm", H_)]
+
+        class BITMAPINFOHEADER(ctypes.Structure):
+            _fields_ = [("biSize", wt.DWORD), ("biWidth", wt.LONG), ("biHeight", wt.LONG),
+                        ("biPlanes", wt.WORD), ("biBitCount", wt.WORD), ("biCompression", wt.DWORD),
+                        ("biSizeImage", wt.DWORD), ("biXPelsPerMeter", wt.LONG),
+                        ("biYPelsPerMeter", wt.LONG), ("biClrUsed", wt.DWORD),
+                        ("biClrImportant", wt.DWORD)]
+
+        class BLENDFUNCTION(ctypes.Structure):
+            _fields_ = [("BlendOp", ctypes.c_ubyte), ("BlendFlags", ctypes.c_ubyte),
+                        ("SourceConstantAlpha", ctypes.c_ubyte), ("AlphaFormat", ctypes.c_ubyte)]
+
+        class WINDOWPOS(ctypes.Structure):
+            _fields_ = [("hwnd", wt.HWND), ("hwndInsertAfter", wt.HWND), ("x", ctypes.c_int),
+                        ("y", ctypes.c_int), ("cx", ctypes.c_int), ("cy", ctypes.c_int),
+                        ("flags", wt.UINT)]
+
+        self.BITMAPINFOHEADER, self.WINDOWPOS = BITMAPINFOHEADER, WINDOWPOS
+        self.blend = BLENDFUNCTION(0, 0, 255, 1)          # AC_SRC_OVER, per-pixel AC_SRC_ALPHA
+
+        # proper prototypes, so 64-bit handles and pointers aren't cut down to C ints
+        sig = {
+            u32.DefWindowProcW: (LRESULT, [wt.HWND, wt.UINT, wt.WPARAM, wt.LPARAM]),
+            u32.RegisterClassExW: (wt.ATOM, [ctypes.c_void_p]),
+            u32.CreateWindowExW: (wt.HWND, [wt.DWORD, wt.LPCWSTR, wt.LPCWSTR, wt.DWORD, ctypes.c_int,
+                                            ctypes.c_int, ctypes.c_int, ctypes.c_int, wt.HWND, H_, H_,
+                                            ctypes.c_void_p]),
+            u32.ShowWindow: (wt.BOOL, [wt.HWND, ctypes.c_int]),
+            u32.DestroyWindow: (wt.BOOL, [wt.HWND]),
+            u32.GetDC: (wt.HDC, [wt.HWND]),
+            u32.ReleaseDC: (ctypes.c_int, [wt.HWND, wt.HDC]),
+            u32.PeekMessageW: (wt.BOOL, [ctypes.c_void_p, wt.HWND, wt.UINT, wt.UINT, wt.UINT]),
+            u32.TranslateMessage: (wt.BOOL, [ctypes.c_void_p]),
+            u32.DispatchMessageW: (LRESULT, [ctypes.c_void_p]),
+            u32.RegisterHotKey: (wt.BOOL, [wt.HWND, ctypes.c_int, wt.UINT, wt.UINT]),
+            u32.UnregisterHotKey: (wt.BOOL, [wt.HWND, ctypes.c_int]),
+            u32.GetSystemMetrics: (ctypes.c_int, [ctypes.c_int]),
+            u32.SetWindowPos: (wt.BOOL, [wt.HWND, wt.HWND, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+                                         ctypes.c_int, wt.UINT]),
+            ctypes.windll.kernel32.GetModuleHandleW: (H_, [wt.LPCWSTR]),
+            u32.UpdateLayeredWindow: (wt.BOOL, [wt.HWND, wt.HDC, ctypes.c_void_p, ctypes.c_void_p,
+                                                wt.HDC, ctypes.c_void_p, wt.DWORD, ctypes.c_void_p,
+                                                wt.DWORD]),
+            g32.CreateCompatibleDC: (wt.HDC, [wt.HDC]),
+            g32.DeleteDC: (wt.BOOL, [wt.HDC]),
+            g32.CreateDIBSection: (wt.HBITMAP, [wt.HDC, ctypes.c_void_p, wt.UINT,
+                                                ctypes.POINTER(ctypes.c_void_p), H_, wt.DWORD]),
+            g32.SelectObject: (H_, [wt.HDC, H_]),
+            g32.DeleteObject: (wt.BOOL, [H_]),
+            g32.GdiFlush: (wt.BOOL, []),
+        }
+        for fn, (res, args_) in sig.items():
+            fn.restype, fn.argtypes = res, args_
+
+        # draw in real pixels, scaled to the display's DPI so the blob keeps its size
+        try:
+            u32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))   # per-monitor v2
+        except (AttributeError, OSError):
+            try:
+                ctypes.windll.shcore.SetProcessDpiAwareness(2)
+            except (AttributeError, OSError):
+                pass
+        try:
+            self.scale = u32.GetDpiForSystem() / 96
+        except (AttributeError, OSError):
+            self.scale = 1.0
+
+        hinst = ctypes.windll.kernel32.GetModuleHandleW(None)
+        self._wndproc = self.WNDPROC(self._proc)     # keep a reference: Windows calls it later
+        wc = WNDCLASSEXW()
+        wc.cbSize = ctypes.sizeof(WNDCLASSEXW)
+        wc.lpfnWndProc = self._wndproc
+        wc.hInstance = hinst
+        wc.lpszClassName = "soundblob"
+        u32.RegisterClassExW(ctypes.byref(wc))
+        ex = 0x80000 | 0x20 | 0x80 | 0x08000000     # LAYERED | TRANSPARENT | TOOLWINDOW | NOACTIVATE
+        if self.layer == "overlay":
+            ex |= 0x8                               # TOPMOST
+        self.w, self.h = u32.GetSystemMetrics(0), u32.GetSystemMetrics(1)
+        self.hwnd = u32.CreateWindowExW(ex, "soundblob", "soundblob", 0x80000000,   # POPUP
+                                        0, 0, self.w, self.h, None, None, hinst, None)
+        if not self.hwnd:
+            raise OSError("couldn't create the overlay window")
+        self.screen_dc = u32.GetDC(None)
+        self.mem_dc = g32.CreateCompatibleDC(self.screen_dc)
+        self.bitmap = self.old_bitmap = None
+        self._make_buffer()
+        for i, key in self.HOTKEYS.items():                  # Ctrl+Alt+Shift, no auto-repeat
+            if not u32.RegisterHotKey(self.hwnd, i, 0x1 | 0x2 | 0x4 | 0x4000, ord(key)):
+                print(f"hotkey Ctrl+Alt+Shift+{key} is taken by another program", file=sys.stderr)
+        u32.ShowWindow(self.hwnd, 4)                        # SW_SHOWNOACTIVATE
+
+    def _make_buffer(self):
+        ct, g32 = self.ct, self.g32
+        self.w, self.h = self.u32.GetSystemMetrics(0), self.u32.GetSystemMetrics(1)
+        if self.bitmap:
+            g32.SelectObject(self.mem_dc, self.old_bitmap)
+            g32.DeleteObject(self.bitmap)
+        bmi = self.BITMAPINFOHEADER()
+        bmi.biSize = ct.sizeof(bmi)
+        bmi.biWidth, bmi.biHeight = self.w, -self.h          # negative: top-down rows, like cairo
+        bmi.biPlanes, bmi.biBitCount = 1, 32
+        bits = ct.c_void_p()
+        self.bitmap = g32.CreateDIBSection(self.mem_dc, ct.byref(bmi), 0, ct.byref(bits), None, 0)
+        if not self.bitmap:
+            raise OSError("couldn't create the drawing buffer")
+        self.old_bitmap = g32.SelectObject(self.mem_dc, self.bitmap)
+        stride = cairo.ImageSurface.format_stride_for_width(cairo.FORMAT_ARGB32, self.w)
+        assert stride == self.w * 4
+        self._pixels = (ct.c_ubyte * (stride * self.h)).from_address(bits.value)
+        self.surface = cairo.ImageSurface.create_for_data(
+            self._pixels, cairo.FORMAT_ARGB32, self.w, self.h, stride)
+
+    def _proc(self, hwnd, msg, wparam, lparam):
+        if msg == 0x46 and self.layer == "bottom":          # WM_WINDOWPOSCHANGING: stay at the back
+            pos = self.ct.cast(lparam, self.ct.POINTER(self.WINDOWPOS)).contents
+            pos.hwndInsertAfter = 1                          # HWND_BOTTOM
+            pos.flags &= ~0x4                                # not SWP_NOZORDER
+            return 0
+        if msg == 0x7E:                                      # WM_DISPLAYCHANGE
+            self._resize = True
+        elif msg == 0x2:                                     # WM_DESTROY
+            self.running = False
+        return self.u32.DefWindowProcW(hwnd, msg, wparam, lparam)
+
+    def _present(self):
+        ct, wt = self.ct, self.wt
+        size, src, dst = wt.SIZE(self.w, self.h), wt.POINT(0, 0), wt.POINT(0, 0)
+        self.u32.UpdateLayeredWindow(self.hwnd, self.screen_dc, ct.byref(dst), ct.byref(size),
+                                     self.mem_dc, ct.byref(src), 0, ct.byref(self.blend), 2)
+
+    def run(self, debug=None):
+        ct, u32 = self.ct, self.u32
+        msg = self.wt.MSG()
+        winmm = ct.windll.winmm
+        winmm.timeBeginPeriod(1)                    # 1 ms sleeps, for a steady 60 fps
+        last = time.perf_counter()
+        next_debug = last + 1
+        try:
+            while self.running:
+                while u32.PeekMessageW(ct.byref(msg), None, 0, 0, 1):     # PM_REMOVE
+                    if msg.message == 0x12:                               # WM_QUIT
+                        self.running = False
+                    elif msg.message == 0x312:                            # WM_HOTKEY
+                        key = self.HOTKEYS.get(msg.wParam)
+                        if key == "F":
+                            self.stage.show_fps = not self.stage.show_fps
+                        elif key == "O":
+                            self.stage.show_scope = not self.stage.show_scope
+                        elif key == "Q":
+                            self.running = False
+                    u32.TranslateMessage(ct.byref(msg))
+                    u32.DispatchMessageW(ct.byref(msg))
+                if self._resize:
+                    self._resize = False
+                    self._make_buffer()
+                    u32.SetWindowPos(self.hwnd, None, 0, 0, self.w, self.h, 0x4 | 0x10)
+                now = time.perf_counter()
+                dt = min(now - last, 1 / 20)
+                last = now
+                s = self.scale
+                self.stage.tick(dt, int(self.w / s), int(self.h / s))
+                self.g32.GdiFlush()
+                cr = cairo.Context(self.surface)
+                cr.scale(s, s)
+                self.stage.draw(cr)
+                del cr
+                self.surface.flush()
+                self._present()
+                if debug and now >= next_debug:
+                    next_debug = now + 1
+                    debug()
+                time.sleep(max(0.0, now + self.FRAME - time.perf_counter()))
+        finally:
+            winmm.timeEndPeriod(1)
+            for i in self.HOTKEYS:
+                u32.UnregisterHotKey(self.hwnd, i)
+            self.surface = None
+            self.g32.SelectObject(self.mem_dc, self.old_bitmap)
+            self.g32.DeleteObject(self.bitmap)
+            self.g32.DeleteDC(self.mem_dc)
+            u32.ReleaseDC(None, self.screen_dc)
+            u32.DestroyWindow(self.hwnd)
+
+
 def main():
     ap = argparse.ArgumentParser(description="A weird blob that bounces to your music.")
-    ap.add_argument("--device", default="@DEFAULT_MONITOR@",
-                    help="PulseAudio source to listen to (default: monitor of default sink). "
-                         "List with: pactl list short sources")
+    ap.add_argument("--device", default=None,
+                    help="Linux: PulseAudio source to listen to (default: monitor of the default "
+                         "sink; list with: pactl list short sources). Windows: (part of) the name "
+                         "of the output device to listen to (default: the default output)")
     ap.add_argument("--size", type=float, default=70, help="blob base radius in px (default 70)")
     ap.add_argument("--layer", choices=("overlay", "top", "bottom"), default="overlay",
-                    help="overlay = above everything; bottom = only on the bare desktop/wallpaper")
+                    help="overlay = above everything; top = above the desktop but not always on "
+                         "top (Windows); bottom = only on the bare desktop/wallpaper")
     ap.add_argument("--confetti", type=float, default=1.0,
                     help="confetti amount: 0 = none, 1 = default, 2 = double (more costs CPU)")
     ap.add_argument("--no-fps", action="store_true", help="hide the FPS readout")
@@ -4809,15 +5200,27 @@ def main():
                     help="print what the analyzer hears (tempo, drums, mood...) once a second")
     args = ap.parse_args()
 
+    if args.device is None:
+        args.device = "" if IS_WINDOWS else "@DEFAULT_MONITOR@"
     audio = Audio(args.device)
     audio.start()
+    stage = Stage(args, audio)
+    if IS_WINDOWS:
+        try:
+            Win32Overlay(stage, args).run(
+                debug=(lambda: print(audio.debug_line(), flush=True)) if args.debug else None)
+        except KeyboardInterrupt:
+            pass
+        audio.running = False
+        return
+
     if args.debug:
         def report():
             print(audio.debug_line(), flush=True)
             return GLib.SOURCE_CONTINUE
         GLib.timeout_add(1000, report)
 
-    win = Overlay(args, audio)
+    win = GtkOverlay(args, stage)
     win.show_all()
 
     try:
@@ -4832,13 +5235,13 @@ def main():
     # The overlay never takes keyboard focus, so a hotkey sends a signal instead:
     #   pkill -USR1 -f '^python3 \S*soundblob\.py( |$)'   -> toggle the FPS readout
     def toggle_fps():
-        win.show_fps = not win.show_fps
+        stage.show_fps = not stage.show_fps
         return GLib.SOURCE_CONTINUE
     add_signal(GLib.PRIORITY_DEFAULT, signal.SIGUSR1, toggle_fps)
 
     #   pkill -USR2 -f '^python3 \S*soundblob\.py( |$)'   -> toggle the oscilloscope
     def toggle_scope():
-        win.show_scope = not win.show_scope
+        stage.show_scope = not stage.show_scope
         return GLib.SOURCE_CONTINUE
     add_signal(GLib.PRIORITY_DEFAULT, signal.SIGUSR2, toggle_scope)
     Gtk.main()

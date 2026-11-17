@@ -2,11 +2,12 @@
 
 A colorful, weird, googly-eyed blob that bounces around your desktop to whatever
 music is playing. It's a transparent, click-through overlay for sway and other
-wlroots compositors.
+wlroots compositors, and for Windows 10 and 11.
 
 ## Features
 
-- Listens to system audio (the default sink's monitor, via `parec`).
+- Listens to system audio: the default sink's monitor via `parec` on Linux, WASAPI
+  loopback of the default output on Windows.
 - Detects kicks, snares and hi-hats separately, tracks tempo, and spots breakdowns and drops.
 - Mood ranges from lazy (droopy eyelids, yawns) to crazy (spinning pupils, teeth, strobing).
   It follows loudness, drum density, tempo and guitar distortion.
@@ -26,8 +27,18 @@ wlroots compositors.
 
 ## Requirements
 
-Python 3, numpy, PyGObject (GTK 3), pycairo, gtk-layer-shell, and `parec`
+**Linux:** Python 3, numpy, PyGObject (GTK 3), pycairo, gtk-layer-shell, and `parec`
 (from libpulse or pipewire-pulse).
+
+**Windows:** Python 3 from python.org and these packages:
+
+```bat
+pip install numpy pycairo PyAudioWPatch winrt-runtime winrt-Windows.Media.Control winrt-Windows.Foundation winrt-Windows.Foundation.Collections
+```
+
+PyAudioWPatch records what the speakers play (WASAPI loopback). The `winrt` packages read
+the song name from Windows' media controls, which Spotify reports to. That's what the
+band easter eggs and the 90s / early-2000s looks need; without them the blob still dances.
 
 ## Usage
 
@@ -42,13 +53,20 @@ Python 3, numpy, PyGObject (GTK 3), pycairo, gtk-layer-shell, and `parec`
 ./soundblob.py --debug          # print what the analyzer hears once a second
 ```
 
+On Windows, run it with `python soundblob.py` (or `pythonw soundblob.py` for no console
+window). It covers the primary monitor and is sized for its display scaling. `--device`
+takes part of an output device's name, such as `--device Headphones`. If you switch audio
+outputs while it runs, restart it. The overlay never takes keyboard focus, so it uses global
+hotkeys: Ctrl+Alt+Shift+F shows or hides the FPS readout, Ctrl+Alt+Shift+O the
+oscilloscope, and Ctrl+Alt+Shift+Q quits.
+
 The FPS readout in the bottom-right corner shows frames per second, CPU draw time per
 frame, and how much confetti is on screen. It turns amber below 50 fps and red below 30.
 Confetti is the main CPU cost (about 0.02 ms per particle per frame), so lower `--confetti`
 if the readout goes amber. The dark screen edges cost about 3 ms per frame at 1080p
 while the music is heavy (nothing otherwise); `--no-vignette` turns them off.
 
-### Sway keybindings
+### Sway keybindings (Linux)
 
 The overlay never takes keyboard focus, so hotkeys go through sway. Super+Shift+B toggles
 the blob on and off. Super+Shift+F shows or hides the FPS readout (it sends `SIGUSR1`), and
